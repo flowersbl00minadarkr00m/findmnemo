@@ -1,0 +1,78 @@
+name: Source run
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: source-run-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-matrix:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            arch: x64
+          - name: Windows arm64 (preview runner)
+            os: windows-11-arm
+            arch: arm64
+          - name: macOS Intel
+            os: macos-15-intel
+            arch: x64
+          - name: macOS Apple silicon
+            os: macos-15
+            arch: arm64
+          - name: Ubuntu 24.04 x64
+            os: ubuntu-24.04
+            arch: x64
+          - name: Ubuntu 24.04 arm64 (preview runner)
+            os: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          architecture: ${{ matrix.arch }}
+          cache: npm
+      - name: Locked install
+        run: npm ci
+      - name: Contract, privacy, build, and source-smoke gates
+        run: npm run verify:ci
+
+  source-matrix-complete:
+    name: Required source matrix
+    if: ${{ always() }}
+    needs: source-matrix
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every matrix row
+        shell: bash
+        run: test "${{ needs.source-matrix.result }}" = "success"
+
+  windows-desktop-regression:
+    name: Windows desktop regression
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          architecture: x64
+          cache: npm
+      - run: npm ci
+      - run: npm run check:desktop-boundary
+      - run: npm run build:desktop

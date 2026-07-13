@@ -1,0 +1,37 @@
+appId: app.findmnemo.companion
+productName: FindMnemo Companion
+artifactName: FindMnemo-Companion-${version}-${arch}.${ext}
+asar: true
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  grantFileProtocolExtraPrivileges: false
+electronDist: node_modules/electron/dist
+directories:
+  output: release-desktop
+files:
+  - dist/**/*
+  - dist-desktop/**/*
+  - dist-desktop-renderer/**/*
+  - package.json
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  requestedExecutionLevel: asInvoker
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: false
+  allowToChangeInstallationDirectory: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: FindMnemo Companion
+  include: build/installer.nsh
+publish:
+  provider: generic
+  url: https://mnemosync.vercel.app/releases/windows/x64/

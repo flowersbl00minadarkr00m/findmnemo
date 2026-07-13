@@ -1,0 +1,39 @@
+import type { HomeView } from '../types'
+
+export function WorkspaceViewSwitch({
+  value,
+  onChange,
+  briefDisabled = false,
+}: {
+  value: HomeView
+  onChange: (view: HomeView) => void
+  briefDisabled?: boolean
+}) {
+  return (
+    <fieldset className="inline-flex rounded-sm border border-line bg-chrome p-1" aria-label="Home view">
+      <legend className="sr-only">Home view</legend>
+      {(['operations', 'brief'] as const).map((view) => {
+        const disabled = view === 'brief' && briefDisabled
+        return (
+          <label
+            key={view}
+            className={`rounded-sm px-3 py-1.5 text-xs font-mono uppercase tracking-[0.1em] transition-colors ${
+              value === view ? 'bg-sync text-chrome' : 'text-mut hover:text-ink'
+            } ${disabled ? 'cursor-not-allowed opacity-45' : 'cursor-pointer'}`}
+          >
+            <input
+              className="sr-only"
+              type="radio"
+              name="home-view"
+              value={view}
+              checked={value === view}
+              disabled={disabled}
+              onChange={() => onChange(view)}
+            />
+            {view === 'operations' ? 'Operations Desk' : 'Daily Brief'}
+          </label>
+        )
+      })}
+    </fieldset>
+  )
+}

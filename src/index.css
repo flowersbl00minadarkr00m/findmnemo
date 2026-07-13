@@ -1,0 +1,164 @@
+@import "tailwindcss";
+
+/* FindMnemo "Signal room" theme.
+   A dark operational cockpit for cross-agent work: dense, calm, high contrast,
+   with restrained cinematic depth from grids, scanlines, and glass panels. */
+
+@theme {
+  --color-mist: #0d1417;
+  --color-paper: #141d23;
+  --color-line: #26343d;
+  --color-ink: #f4f7f8;
+  --color-mut: #9aa8b0;
+  --color-faint: #62727e;
+
+  --color-chrome: #0b1013;
+  --color-chrome-raised: #131f26;
+  --color-chrome-line: #1f2d35;
+  --color-chrome-ink: #f3fbff;
+  --color-chrome-mut: #8399a6;
+
+  --color-sync: #ff7a2f;
+  --color-memory: #ff9a5c;
+  --color-ok: #4ade80;
+  --color-warn: #f4b63f;
+  --color-alert: #ff5f6d;
+
+  --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #26343d transparent;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  @apply bg-mist text-ink min-h-screen antialiased;
+  font-family: "Lato", "Open Sans", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+::selection {
+  background: rgba(255, 122, 47, 0.24);
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(135deg, rgba(255, 122, 47, 0.1), transparent 28%),
+    radial-gradient(900px 360px at 84% -120px, rgba(255, 154, 92, 0.1), transparent 70%),
+    radial-gradient(680px 300px at 12% 0%, rgba(232, 100, 28, 0.07), transparent 72%),
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px);
+  background-size: auto, auto, auto, 28px 28px, 28px 28px;
+  z-index: 0;
+}
+
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.28));
+  z-index: 0;
+}
+
+kbd {
+  font-family: var(--font-mono);
+}
+
+@layer components {
+  .panel {
+    position: relative;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.025)),
+      color-mix(in srgb, var(--color-paper) 88%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-line) 88%, transparent);
+    box-shadow:
+      0 20px 46px rgba(0, 0, 0, 0.22),
+      inset 0 1px 0 rgba(255, 255, 255, 0.045);
+    backdrop-filter: blur(14px);
+  }
+
+  .panel::before,
+  .panel::after {
+    content: "";
+    position: absolute;
+    width: 16px;
+    height: 16px;
+    pointer-events: none;
+  }
+
+  .panel::before {
+    top: -1px;
+    left: -1px;
+    border-top: 1px solid color-mix(in srgb, var(--color-sync) 62%, transparent);
+    border-left: 1px solid color-mix(in srgb, var(--color-sync) 62%, transparent);
+  }
+
+  .panel::after {
+    bottom: -1px;
+    right: -1px;
+    border-bottom: 1px solid color-mix(in srgb, var(--color-memory) 58%, transparent);
+    border-right: 1px solid color-mix(in srgb, var(--color-memory) 58%, transparent);
+  }
+
+  .hud-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--color-mut);
+  }
+
+  .hud-label::before {
+    content: "";
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-right: 7px;
+    border-radius: 1px;
+    background: var(--color-sync);
+    box-shadow: 0 0 16px rgba(255, 122, 47, 0.6);
+    vertical-align: 1px;
+  }
+
+  .hud-corners > i {
+    position: absolute;
+    width: 22px;
+    height: 22px;
+    pointer-events: none;
+    z-index: 10;
+    border: 0 solid color-mix(in srgb, var(--color-sync) 64%, transparent);
+  }
+
+  .hud-corners > i:nth-of-type(1) { top: -1px; left: -1px; border-top-width: 1px; border-left-width: 1px; }
+  .hud-corners > i:nth-of-type(2) { top: -1px; right: -1px; border-top-width: 1px; border-right-width: 1px; }
+  .hud-corners > i:nth-of-type(3) { bottom: -1px; left: -1px; border-bottom-width: 1px; border-left-width: 1px; }
+  .hud-corners > i:nth-of-type(4) { bottom: -1px; right: -1px; border-bottom-width: 1px; border-right-width: 1px; }
+
+  .font-mono {
+    font-family: var(--font-mono);
+  }
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.48; transform: scale(0.92); }
+}
+
+.pulse-soft {
+  animation: pulse-soft 1.6s ease-in-out infinite;
+}
