@@ -581,6 +581,7 @@ export default function App({ operationalRepository }: { operationalRepository: 
                       loadIssue={routingPolicyState.issue}
                       ticket={ticketsWithGenerated.find((ticket) => ticket.id === routingTicketId)}
                       onPolicyChange={(policy) => setRoutingPolicyState({ policy })}
+                      operationalRepository={operationalRepository}
                     />
                   )}
 

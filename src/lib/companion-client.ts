@@ -3,9 +3,15 @@ import {
   type CompanionApiResponse,
   type CompanionConnectionState,
   type CompanionIdentityDto,
+  type DestinationDiscoveryDto,
+  type DestinationModelCatalogDto,
   type GmailCandidateDto,
   type GmailCheckDto,
   type GmailTicketAssociationDto,
+  type OperationalPolicyMigrationPreview,
+  type OperationalRoutingPolicy,
+  type ProfileReadinessResultDto,
+  type RoutingDispatchReceiptDto,
   type ReconciliationRunDto,
   type SourceDescriptor,
   type SourceId,
@@ -39,6 +45,16 @@ export interface CompanionConnectionEvidence {
   lastSuccessfulAt?: string
   permission?: 'prompt' | 'granted' | 'denied' | 'unsupported'
   error?: string
+}
+
+export class CompanionApiRequestError extends Error {
+  readonly code: string
+
+  constructor(code: string, message = code) {
+    super(message)
+    this.name = 'CompanionApiRequestError'
+    this.code = code
+  }
 }
 
 function browserNonce(): string {
@@ -241,5 +257,77 @@ export async function previewLegacyMigration(session: CompanionSession, records:
 export async function commitLegacyMigration(session: CompanionSession, records: LegacyMigrationRecord[], idempotencyKey: string): Promise<LegacyMigrationResult> {
   const response = await request<LegacyMigrationResult>('/migration/legacy-tickets/commit', { method: 'POST', headers: { 'idempotency-key': idempotencyKey }, body: JSON.stringify({ records }) }, session)
   if (response.error || !response.data) throw new Error(response.error?.code ?? 'INVALID_REQUEST')
+  return response.data
+}
+
+export async function getOperationalRoutingPolicy(session: CompanionSession): Promise<OperationalRoutingPolicy | null> {
+  const response = await request<{ policy: OperationalRoutingPolicy | null }>('/routing/policy', {}, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'ROUTING_POLICY_NOT_FOUND')
+  return response.data.policy
+}
+
+export async function updateOperationalRoutingPolicy(session: CompanionSession, policy: OperationalRoutingPolicy, expectedPolicyVersion: number | null): Promise<OperationalRoutingPolicy> {
+  const response = await request<OperationalRoutingPolicy>('/routing/policy', { method: 'PUT', body: JSON.stringify({ policy, expectedPolicyVersion }) }, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'ROUTING_POLICY_INVALID', response.error?.message)
+  return response.data
+}
+
+export async function previewOperationalRoutingMigration(session: CompanionSession, preview: OperationalPolicyMigrationPreview): Promise<OperationalPolicyMigrationPreview> {
+  const response = await request<OperationalPolicyMigrationPreview>('/routing/migration/preview', { method: 'POST', body: JSON.stringify({ preview }) }, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'ROUTING_MIGRATION_INVALID', response.error?.message)
+  return response.data
+}
+
+export async function commitOperationalRoutingMigration(session: CompanionSession, preview: OperationalPolicyMigrationPreview, idempotencyKey: string): Promise<OperationalRoutingPolicy> {
+  const response = await request<OperationalRoutingPolicy>('/routing/migration/commit', { method: 'POST', headers: { 'idempotency-key': idempotencyKey }, body: JSON.stringify({ preview }) }, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'ROUTING_MIGRATION_INVALID', response.error?.message)
+  return response.data
+}
+
+export async function exportOperationalRoutingPolicyV1(session: CompanionSession): Promise<Record<string, unknown>> {
+  const response = await request<Record<string, unknown>>('/routing/policy/export-v1', {}, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'ROUTING_POLICY_NOT_FOUND', response.error?.message)
+  return response.data
+}
+
+export async function discoverRoutingDestinations(session: CompanionSession): Promise<DestinationDiscoveryDto> {
+  const response = await request<DestinationDiscoveryDto>('/routing/destinations/discover', { method: 'POST', body: '{}' }, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'SOURCE_CHECK_FAILED', response.error?.message)
+  return response.data
+}
+
+export async function refreshPiModelCatalog(session: CompanionSession): Promise<DestinationModelCatalogDto> {
+  const response = await request<DestinationModelCatalogDto>('/routing/destinations/pi-rpc/catalog', { method: 'POST', body: '{}' }, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'ROUTING_DESTINATION_UNAVAILABLE', response.error?.message)
+  return response.data
+}
+
+export async function getPiModelCatalog(session: CompanionSession): Promise<DestinationModelCatalogDto> {
+  const response = await request<DestinationModelCatalogDto>('/routing/destinations/pi-rpc/catalog', {}, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'ROUTING_DESTINATION_UNAVAILABLE', response.error?.message)
+  return response.data
+}
+
+export async function validateOperationalRoutingProfile(session: CompanionSession, profileId: string, expectedPolicyVersion: number): Promise<{ readiness: ProfileReadinessResultDto; policy: OperationalRoutingPolicy }> {
+  const response = await request<{ readiness: ProfileReadinessResultDto; policy: OperationalRoutingPolicy }>(`/routing/profiles/${encodeURIComponent(profileId)}/validate`, { method: 'POST', body: JSON.stringify({ expectedPolicyVersion }) }, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'ROUTING_PROFILE_NOT_FOUND', response.error?.message)
+  return response.data
+}
+
+export async function listRoutingDispatchReceipts(session: CompanionSession): Promise<RoutingDispatchReceiptDto[]> {
+  const response = await request<RoutingDispatchReceiptDto[]>('/routing/dispatches', {}, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'SOURCE_UNAVAILABLE', response.error?.message)
+  return response.data
+}
+
+export async function cancelRoutingDispatch(session: CompanionSession, receiptId: string): Promise<RoutingDispatchReceiptDto> {
+  const response = await request<RoutingDispatchReceiptDto>(`/routing/dispatches/${encodeURIComponent(receiptId)}/cancel`, { method: 'POST', body: '{}' }, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'ROUTING_DISPATCH_NOT_FOUND', response.error?.message)
+  return response.data
+}
+
+export async function retryRoutingDispatch(session: CompanionSession, receiptId: string, idempotencyKey: string): Promise<RoutingDispatchReceiptDto> {
+  const response = await request<RoutingDispatchReceiptDto>(`/routing/dispatches/${encodeURIComponent(receiptId)}/retry`, { method: 'POST', headers: { 'idempotency-key': idempotencyKey }, body: '{}' }, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'RETRY_NOT_ALLOWED', response.error?.message)
   return response.data
 }

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { openFindMnemoDatabase } from '../../server/db/database.js'
+import { DATABASE_SCHEMA_VERSION, openFindMnemoDatabase } from '../../server/db/database.js'
 import { InstallEventCoordinator } from './install-events.js'
 import { ExistingStateAdoptionService, type ListenerInspectorPort } from './migration-service.js'
 
@@ -18,7 +18,7 @@ describe('ExistingStateAdoptionService', () => {
     const database = await openFindMnemoDatabase({ path }); database.close()
     await mkdir(join(dataRoot, 'secrets')); await writeFile(join(dataRoot, 'secrets', 'gmail-refresh-token.dpapi'), 'encrypted-fixture')
     const service = new ExistingStateAdoptionService(dataRoot, listener(), () => new Date('2026-07-12T00:00:00.000Z'))
-    await expect(service.inspect()).resolves.toMatchObject({ state: 'ready', databasePresent: true, schemaVersion: 3, credentialPresent: true })
+    await expect(service.inspect()).resolves.toMatchObject({ state: 'ready', databasePresent: true, schemaVersion: DATABASE_SCHEMA_VERSION, credentialPresent: true })
     await expect(service.adopt()).resolves.toMatchObject({ state: 'adopted', retainedLocation: '%LOCALAPPDATA%\\FindMnemo' })
     await expect(service.adopt()).resolves.toMatchObject({ state: 'already-adopted' })
   })
@@ -38,7 +38,7 @@ describe('ExistingStateAdoptionService', () => {
   it('backs up and migrates an older database before recording adoption', async () => {
     const dataRoot = await root(); const path = join(dataRoot, 'findmnemo.db'); const db = new DatabaseSync(path); db.exec("CREATE TABLE app_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL); INSERT INTO app_meta VALUES('schema_version','0')"); db.close()
     const service = new ExistingStateAdoptionService(dataRoot, listener())
-    await expect(service.adopt()).resolves.toMatchObject({ state: 'adopted', schemaVersion: 3 })
+    await expect(service.adopt()).resolves.toMatchObject({ state: 'adopted', schemaVersion: DATABASE_SCHEMA_VERSION })
     await expect(writeFile(`${path}.pre-adoption.bak`, 'must already exist', { flag: 'wx' })).rejects.toMatchObject({ code: 'EEXIST' })
   })
 

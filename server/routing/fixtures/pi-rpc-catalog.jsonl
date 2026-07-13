@@ -1,0 +1,2 @@
+{"id":"catalog-fixture","type":"response","command":"get_available_models","success":true,"data":{"models":[{"id":"anthropic/claude-sonnet-4","name":"Anthropic: Claude Sonnet 4","provider":"openrouter","reasoning":true,"thinkingLevelMap":{"xhigh":"xhigh"}},{"id":"qwen3:8b","name":"Qwen3 8B Local via Ollama","provider":"ollama","reasoning":false}]}}
+{"id":"state-fixture","type":"response","command":"get_state","success":true,"data":{"model":{"id":"anthropic/claude-sonnet-4","provider":"openrouter"},"thinkingLevel":"high","isStreaming":false,"messageCount":0}}

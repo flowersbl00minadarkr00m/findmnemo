@@ -1,0 +1,3 @@
+dcb8aba1a319221cb339ad6d135c82af0c41ce45993a3b894ab16f15f0ee0c80  FindMnemo-Companion-0.1.0-x64.exe
+e2280475e7da221ef02779f95eccd0bd411f570a62c9ea00a8c9f2e9201d5dc7  FindMnemo-0.1.0-source.zip
+8f27faac2a384c00ede0fd30a9aee1bb2957a5c59c1f21b751b106bdebc12cae  FindMnemo-0.1.0-rc.1.bundle

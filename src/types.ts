@@ -627,6 +627,24 @@ export type ModelRoutingPolicyExportResult =
   | { status: 'invalid'; issues: ModelRoutingValidationIssue[] }
   | { status: 'error'; code: 'download-unavailable'; message: string }
 
+export type {
+  ActualRouteSnapshot,
+  OperationalPolicyMigrationPreview,
+  OperationalRoutingPolicy,
+  OperationalRoutingValidationResult,
+  RequestedProfileSnapshot,
+  RoutingClassificationSource,
+  RoutingExecutionProfile,
+  RoutingPolicyValidationIssueDto,
+  RoutingPreflightRequest,
+  RoutingPreflightResult,
+  RoutingPreflightStatus,
+  RoutingProfileBehavior,
+  RoutingProfileReadiness,
+  RoutingReadinessState,
+  RoutingRequestOverride,
+} from '../shared/companion-contract'
+
 export interface EmailThread {
   id: string
   subject: string

@@ -4,6 +4,8 @@ Support is evidence-based. A runnable Node binary alone is not a FindMnemo full-
 
 Automated CI and real-user acceptance are different evidence categories. The source matrix runs locked installs, contract tests, privacy scans, builds, and an isolated loopback smoke on GitHub-hosted Windows, macOS, and Ubuntu x64/arm64 runners. It uses fake credential-store contract tests; it does **not** prove that a real Keychain or Secret Service session is unlocked, nor that Gmail OAuth completed. GitHub's current standard runner labels are tracked in the [official hosted-runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners); the Windows and Ubuntu arm64 labels are public-preview infrastructure and a failed row blocks support promotion.
 
+Fresh automated evidence: [Source run 29222169928](https://github.com/flowersbl00minadarkr00m/findmnemo/actions/runs/29222169928) passed Windows x64/arm64, macOS Intel/Apple silicon, Ubuntu 24.04 x64/arm64, the Windows desktop regression, and the required aggregate job on 2026-07-12. macOS and Ubuntu remain experimental for **full Gmail parity** until clean desktop hosts complete real Keychain/Secret Service and Gmail OAuth acceptance.
+
 | Platform | Architecture | Current claim | Gmail requirement |
 |---|---:|---|---|
 | Windows 11 source run | x64 | Supported regression path | Existing DPAPI CurrentUser store |

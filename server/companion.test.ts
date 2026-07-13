@@ -4,11 +4,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { COMPANION_HOST, CompanionStartError, installCompanionSignalHandlers, startCompanion, type RunningCompanion } from './companion.js'
+import { COMPANION_HOST, CompanionStartError, installCompanionSignalHandlers, startCompanion, type CompanionDependencies, type RunningCompanion } from './companion.js'
 import { EventEmitter } from 'node:events'
 import { createServer } from 'node:http'
-import { COMPANION_PROTOCOL_VERSION } from '../shared/companion-contract.js'
+import { COMPANION_PROTOCOL_VERSION, type OperationalRoutingPolicy } from '../shared/companion-contract.js'
 import { OperationalRepository } from './db/operational-repository.js'
+import { MemorySecretStore } from './auth/secret-store.js'
+import { RoutingIntegrationAuthService } from './routing/integration-auth.js'
 
 describe('loopback companion shell', () => {
   let distPath: string
@@ -26,8 +28,8 @@ describe('loopback companion shell', () => {
     await rm(distPath, { recursive: true, force: true })
   })
 
-  async function start(port = 0): Promise<RunningCompanion> {
-    const companion = await startCompanion({ port, distPath, databasePath: join(distPath, 'findmnemo.db'), instanceId: 'test-instance', clock: () => new Date('2026-07-10T00:00:00.000Z') })
+  async function start(port = 0, overrides: CompanionDependencies = {}): Promise<RunningCompanion> {
+    const companion = await startCompanion({ port, distPath, databasePath: join(distPath, 'findmnemo.db'), instanceId: 'test-instance', clock: () => new Date('2026-07-10T00:00:00.000Z'), ...overrides })
     running.push(companion)
     return companion
   }
@@ -37,6 +39,15 @@ describe('loopback companion shell', () => {
       origin: `http://${COMPANION_HOST}:${companion.port}`,
       'x-findmnemo-protocol-version': COMPANION_PROTOCOL_VERSION,
       ...extra,
+    }
+  }
+
+  function routingPolicy(): OperationalRoutingPolicy {
+    return {
+      schemaVersion: '2.0.0', policyProfile: 'findmnemo.model-routing.v2', policyVersion: 0, updatedAt: '2026-07-10T00:00:00.000Z',
+      capabilities: [{ id: 'writing', family: 'creation', label: 'Writing', description: 'Draft text', origin: 'built-in' }],
+      profiles: [{ id: 'route:writer', displayName: 'Writer', destinationAdapterId: 'manual', destinationInstanceId: 'legacy:route:writer', providerId: null, modelId: 'manual', effort: null, capabilityIds: ['writing'], enabled: true, behavior: 'recommend', fallbackOrder: 0, readiness: { state: 'unchecked', checkedAt: null, expiresAt: null, adapterVersion: null, installedVersion: null, reasonCode: null } }],
+      defaultProfileOrder: ['route:writer'], capabilityOverrides: [],
     }
   }
 
@@ -61,6 +72,7 @@ describe('loopback companion shell', () => {
     const companion = await start()
     const base = `http://${COMPANION_HOST}:${companion.port}`
     const app = await fetch(`${base}/app/tickets`)
+    const sample = await fetch(`${base}/demo/tickets`)
     const apiMiss = await fetch(`${base}/api/v1/missing`, { headers: apiHeaders(companion) })
 
     expect(app.status).toBe(200)
@@ -68,6 +80,8 @@ describe('loopback companion shell', () => {
     expect(appHtml).toContain('Operational fallback')
     expect(appHtml).toMatch(/name="findmnemo-local-bootstrap" content="[A-Za-z0-9_-]{16,128}"/)
     expect(app.headers.get('content-security-policy')).toContain("connect-src 'self' http://127.0.0.1:3210")
+    expect(sample.status).toBe(200)
+    expect(await sample.text()).toContain('Operational fallback')
     expect(apiMiss.status).toBe(404)
     expect(apiMiss.headers.get('content-type')).toContain('application/json')
   })
@@ -90,6 +104,41 @@ describe('loopback companion shell', () => {
       authorization: `Bearer ${firstBody.data.token}`,
       'x-findmnemo-browser-nonce': browserNonce,
     }) })).status).toBe(200)
+  })
+
+  it('requires the separate scoped routing token and never accepts browser pairing as integration auth', async () => {
+    const store = new MemorySecretStore(); const companion = await start(0, { routingSecretStore: store })
+    const endpoint = `http://${COMPANION_HOST}:${companion.port}/api/v1/integration/routing/recommend`
+    const headers = apiHeaders(companion, { 'content-type': 'application/json' })
+    const body = JSON.stringify({ capabilityIds: ['writing'], classificationSource: 'explicit', classificationAmbiguous: false, override: { mode: 'none' } })
+    expect((await fetch(endpoint, { method: 'POST', headers, body })).status).toBe(401)
+    const token = await new RoutingIntegrationAuthService(store).ensure()
+    const authorized = await fetch(endpoint, { method: 'POST', headers: { ...headers, 'x-findmnemo-routing-token': token }, body })
+    expect(authorized.status).toBe(200)
+    expect((await authorized.json() as { data: { disposition: string } }).data.disposition).toBe('unavailable')
+  })
+
+  it('persists paired routing policy updates and returns a typed stale-write conflict', async () => {
+    const companion = await start()
+    const base = `http://${COMPANION_HOST}:${companion.port}/api/v1`
+    const browserNonce = 'routing_browser_nonce_123456'
+    const pair = await fetch(`${base}/pairing/session`, { method: 'POST', headers: apiHeaders(companion, { 'content-type': 'application/json' }), body: JSON.stringify({ code: companion.pairingCode, browserNonce }) })
+    const token = ((await pair.json()) as { data: { token: string } }).data.token
+    const headers = apiHeaders(companion, { authorization: `Bearer ${token}`, 'x-findmnemo-browser-nonce': browserNonce, 'content-type': 'application/json' })
+    const save = await fetch(`${base}/routing/policy`, { method: 'PUT', headers, body: JSON.stringify({ expectedPolicyVersion: null, policy: routingPolicy() }) })
+    expect(save.status).toBe(200)
+    expect((await save.json() as { data: OperationalRoutingPolicy }).data.policyVersion).toBe(1)
+    const conflict = await fetch(`${base}/routing/policy`, { method: 'PUT', headers, body: JSON.stringify({ expectedPolicyVersion: 0, policy: routingPolicy() }) })
+    expect(conflict.status).toBe(409)
+    expect((await conflict.json() as { error: { code: string } }).error.code).toBe('ROUTING_POLICY_CONFLICT')
+    const read = await fetch(`${base}/routing/policy`, { headers })
+    expect((await read.json() as { data: { policy: OperationalRoutingPolicy } }).data.policy.policyVersion).toBe(1)
+    const receipts = await fetch(`${base}/routing/dispatches`, { headers })
+    expect((await receipts.json() as { data: unknown[] }).data).toEqual([])
+    const missingCancel = await fetch(`${base}/routing/dispatches/missing/cancel`, { method: 'POST', headers, body: '{}' })
+    expect((await missingCancel.json() as { error: { code: string } }).error.code).toBe('ROUTING_DISPATCH_NOT_FOUND')
+    const missingRetry = await fetch(`${base}/routing/dispatches/missing/retry`, { method: 'POST', headers: { ...headers, 'idempotency-key': 'new-generation-key' }, body: '{}' })
+    expect((await missingRetry.json() as { error: { code: string } }).error.code).toBe('RETRY_NOT_ALLOWED')
   })
 
   it('issues a fresh single-use local bootstrap for every fallback HTML load', async () => {

@@ -1,5 +1,5 @@
 import type { LLMSource, Ticket, TicketStatus } from '../types'
-import type { CredentialCapabilityDto, GmailCandidateDto, GmailCheckDto, GmailTicketAssociationDto, ReconciliationRunDto, SourceDescriptor, SourceId } from '../../shared/companion-contract'
+import type { CredentialCapabilityDto, DestinationDiscoveryDto, DestinationModelCatalogDto, GmailCandidateDto, GmailCheckDto, GmailTicketAssociationDto, OperationalPolicyMigrationPreview, OperationalRoutingPolicy, ProfileReadinessResultDto, ReconciliationRunDto, RoutingDispatchReceiptDto, SourceDescriptor, SourceId } from '../../shared/companion-contract'
 
 export interface GmailSourceStatus {
   configured?: boolean
@@ -36,6 +36,18 @@ export interface OperationalRepository {
   retryReconciliation?(runId: string, sourceIds?: SourceId[]): Promise<ReconciliationRunDto>
   previewLegacyMigration?(records: LegacyMigrationRecord[]): Promise<LegacyMigrationResult>
   commitLegacyMigration?(records: LegacyMigrationRecord[], idempotencyKey: string): Promise<LegacyMigrationResult>
+  getRoutingPolicy?(): Promise<OperationalRoutingPolicy | null>
+  updateRoutingPolicy?(policy: OperationalRoutingPolicy, expectedPolicyVersion: number | null): Promise<OperationalRoutingPolicy>
+  previewRoutingMigration?(preview: OperationalPolicyMigrationPreview): Promise<OperationalPolicyMigrationPreview>
+  commitRoutingMigration?(preview: OperationalPolicyMigrationPreview, idempotencyKey: string): Promise<OperationalRoutingPolicy>
+  exportRoutingPolicyV1?(): Promise<Record<string, unknown>>
+  discoverRoutingDestinations?(): Promise<DestinationDiscoveryDto>
+  refreshPiModelCatalog?(): Promise<DestinationModelCatalogDto>
+  getPiModelCatalog?(): Promise<DestinationModelCatalogDto>
+  validateRoutingProfile?(profileId: string, expectedPolicyVersion: number): Promise<{ readiness: ProfileReadinessResultDto; policy: OperationalRoutingPolicy }>
+  listRoutingDispatchReceipts?(): Promise<RoutingDispatchReceiptDto[]>
+  cancelRoutingDispatch?(receiptId: string): Promise<RoutingDispatchReceiptDto>
+  retryRoutingDispatch?(receiptId: string, idempotencyKey: string): Promise<RoutingDispatchReceiptDto>
 }
 
 export interface OperationalRepositoryState {

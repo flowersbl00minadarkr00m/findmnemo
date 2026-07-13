@@ -20,6 +20,16 @@ import { AgentLedgerAdapter } from './reconciliation/adapters/agent-ledger.js'
 import { SafeLogger } from './observability/logger.js'
 import { resolvePlatformPaths } from './platform/platform-paths.js'
 import { createSourceRunCapabilityReport } from './platform/platform-capabilities.js'
+import { RoutingRepository } from './routing/routing-repository.js'
+import { NodeRoutingProcessRunner } from './routing/process-runner.js'
+import { PiRoutingAdapter } from './routing/adapters/pi-rpc-adapter.js'
+import { createDetectionOnlyAdapters } from './routing/adapters/detection-candidates.js'
+import { DiscoveryService } from './routing/discovery-service.js'
+import { DispatchService } from './routing/dispatch-service.js'
+import { RoutingIntegrationAuthService } from './routing/integration-auth.js'
+import { RoutingIntegrationApi } from './routing/integration-api.js'
+import { createPlatformSecretStore } from './auth/platform-secret-store.js'
+import type { SecretStore } from './auth/secret-store.js'
 
 export const COMPANION_HOST = '127.0.0.1' as const
 export const COMPANION_PORT = 3210
@@ -46,6 +56,10 @@ export interface CompanionDependencies {
   databasePath?: string
   gmailServices?: GmailServices
   capabilityReport?: SourceRunCapabilityReport
+  discoveryService?: DiscoveryService
+  piRoutingAdapter?: PiRoutingAdapter
+  dispatchService?: DispatchService
+  routingSecretStore?: SecretStore
 }
 
 export interface RunningCompanion {
@@ -69,6 +83,10 @@ export async function startCompanion({
   databasePath,
   gmailServices,
   capabilityReport,
+  discoveryService,
+  piRoutingAdapter,
+  dispatchService,
+  routingSecretStore,
 }: CompanionDependencies = {}): Promise<RunningCompanion> {
   if (host !== COMPANION_HOST) {
     throw new CompanionStartError('IDENTITY_MISMATCH', 'Companion host must be literal 127.0.0.1.')
@@ -82,6 +100,18 @@ export async function startCompanion({
   const defaultPaths = databasePath ? undefined : resolvePlatformPaths()
   const database = await openFindMnemoDatabase({ path: databasePath ?? defaultPaths?.databasePath })
   const operationalRepository = new OperationalRepository(database.db)
+  const routingRepository = new RoutingRepository(database.db)
+  const processRunner = new NodeRoutingProcessRunner()
+  const resolvedPiRoutingAdapter = piRoutingAdapter ?? new PiRoutingAdapter(processRunner, undefined, clock)
+  const resolvedDispatchService = dispatchService ?? new DispatchService(routingRepository, [resolvedPiRoutingAdapter], clock)
+  const resolvedSecretStore = routingSecretStore ?? (await createPlatformSecretStore()).store
+  const routingIntegrationAuth = resolvedSecretStore ? new RoutingIntegrationAuthService(resolvedSecretStore) : undefined
+  if (routingIntegrationAuth) await routingIntegrationAuth.ensure()
+  const routingIntegrationApi = routingIntegrationAuth ? new RoutingIntegrationApi(routingIntegrationAuth, resolvedDispatchService, routingRepository) : undefined
+  const resolvedDiscoveryService = discoveryService ?? new DiscoveryService([
+    resolvedPiRoutingAdapter,
+    ...createDetectionOnlyAdapters(processRunner, clock),
+  ], clock)
   const logger = new SafeLogger(join(defaultPaths?.logsRoot ?? dirname(database.path), 'companion.log'))
   await logger.write({ level: 'info', code: 'COMPANION_START', status: 200 })
   const resolvedGmailServices = gmailServices ?? await createGmailServices()
@@ -113,6 +143,11 @@ export async function startCompanion({
       localBootstrapNonce,
       databasePath: database.path,
       operationalRepository,
+      routingRepository,
+      discoveryService: resolvedDiscoveryService,
+      piRoutingAdapter: resolvedPiRoutingAdapter,
+      dispatchService: resolvedDispatchService,
+      routingIntegrationApi,
       gmailServices: resolvedGmailServices,
       gmailCheckService,
       reconciliationEngine,

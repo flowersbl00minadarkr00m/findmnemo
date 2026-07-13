@@ -17,6 +17,9 @@ const RULES = [
   ['service-role-secret', /SUPABASE_SERVICE_ROLE_KEY\s*[:=]\s*["'][^"']{8,}["']/g],
   ['raw-ledger-marker', new RegExp(`${'RAW'}_LEDGER_${'PRIVATE_MARKER'}`, 'g')],
   ['pairing-session-json', /"(?:sessionToken|pairingCode)"\s*:\s*"[A-Za-z0-9_-]{16,}"/g],
+  ['routing-prompt-canary', /ROUTING_PROMPT_PRIVATE_CANARY/g],
+  ['routing-result-canary', /ROUTING_RESULT_PRIVATE_CANARY/g],
+  ['routing-credential-canary', /ROUTING_CREDENTIAL_PRIVATE_CANARY/g],
 ]
 
 export function scanText(text) {
@@ -41,6 +44,7 @@ async function main() {
     `MIME_${'FIXTURE_BODY'}`, `Bearer ${'x'.repeat(32)}`, `hflowers45@${'gmail.com'}`,
     `{"refresh_${'token'}":"private"}`, `SUPABASE_SERVICE_ROLE_KEY="${'x'.repeat(16)}"`,
     `${'RAW'}_LEDGER_${'PRIVATE_MARKER'}`, `{"sessionToken":"${'x'.repeat(24)}"}`,
+    'ROUTING_PROMPT_PRIVATE_CANARY', 'ROUTING_RESULT_PRIVATE_CANARY', 'ROUTING_CREDENTIAL_PRIVATE_CANARY',
   ]
   for (const fixture of forbiddenFixtures) if (scanText(fixture).length !== 1) throw new Error('Privacy scanner self-test failed to reject a forbidden fixture.')
   if (scanText('{"runId":"run-1","count":2,"sourceId":"gmail-followups","result":"partial"}').length) throw new Error('Privacy scanner rejected an approved minimized record.')

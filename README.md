@@ -36,6 +36,8 @@ npm run start:companion
 
 Open `http://127.0.0.1:3210/app` for the local operational surface. For frontend development, run `npm run dev` in a second shell.
 
+For chat-native model routing, configure the plain-language Guided view first, then connect the same local MCP server to [Codex](docs/model-routing/codex-setup.md) and/or [Claude Code](docs/model-routing/claude-code-setup.md). Pi is the initial controllable destination; other detected tools remain recommendation-only until separately qualified.
+
 On this machine, ensure development dependencies are included and `NODE_ENV` is not globally forced to `production` before starting Vite.
 
 ## Gmail Setup
@@ -55,6 +57,7 @@ Existing `gmcli` credentials are not imported. See [docs/gmail-setup.md](docs/gm
 
 ```powershell
 npm run companion:doctor
+npm run verify:chat-routing
 ```
 
 Doctor verifies loopback listener ownership and identity, protocol compatibility, database integrity, OAuth client configuration presence, secure credential-store capability, and browser guidance. It reports evidence-backed codes; a generic fetch failure remains an unknown `error` until diagnostics identify a cause.

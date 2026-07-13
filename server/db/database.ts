@@ -4,7 +4,7 @@ import { dirname, isAbsolute } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { PlatformPathError, resolvePlatformPaths, type ResolvePlatformPathsInput } from '../platform/platform-paths.js'
 
-export const DATABASE_SCHEMA_VERSION = 3
+export const DATABASE_SCHEMA_VERSION = 5
 
 const MIGRATION_001 = `
 CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -82,6 +82,47 @@ CREATE TABLE IF NOT EXISTS gmail_checks (
 UPDATE app_meta SET value='3' WHERE key='schema_version';
 `
 
+const MIGRATION_004 = `
+CREATE TABLE IF NOT EXISTS routing_policy (
+  singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1),
+  schema_version TEXT NOT NULL, policy_profile TEXT NOT NULL,
+  policy_version INTEGER NOT NULL CHECK(policy_version >= 0), updated_at TEXT NOT NULL,
+  capabilities_json TEXT NOT NULL, default_order_json TEXT NOT NULL, overrides_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS routing_profiles (
+  profile_id TEXT PRIMARY KEY, policy_version INTEGER NOT NULL,
+  display_name TEXT NOT NULL, destination_adapter_id TEXT NOT NULL, destination_instance_id TEXT NOT NULL,
+  provider_id TEXT, model_id TEXT NOT NULL, effort TEXT,
+  capability_ids_json TEXT NOT NULL, enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+  behavior TEXT NOT NULL, fallback_order INTEGER NOT NULL,
+  readiness_state TEXT NOT NULL, readiness_checked_at TEXT, readiness_expires_at TEXT,
+  adapter_version TEXT, installed_version TEXT, readiness_reason_code TEXT
+);
+CREATE TABLE IF NOT EXISTS routing_policy_migrations (
+  source_policy_revision TEXT PRIMARY KEY, policy_version INTEGER NOT NULL,
+  result_json TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS routing_dispatch_receipts (
+  id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE, generation INTEGER NOT NULL DEFAULT 1,
+  prior_receipt_id TEXT, origin_adapter_id TEXT NOT NULL, correlation_id TEXT NOT NULL,
+  conversation_ref_hash TEXT, capability_ids_json TEXT NOT NULL, classification_source TEXT NOT NULL,
+  policy_version INTEGER NOT NULL, requested_profile_json TEXT NOT NULL, actual_route_json TEXT,
+  state TEXT NOT NULL, return_state TEXT NOT NULL, created_at TEXT NOT NULL,
+  accepted_at TEXT, started_at TEXT, finished_at TEXT, failure_code TEXT,
+  request_hash TEXT NOT NULL, result_hash TEXT,
+  FOREIGN KEY(prior_receipt_id) REFERENCES routing_dispatch_receipts(id)
+);
+UPDATE app_meta SET value='4' WHERE key='schema_version';
+`
+
+const MIGRATION_005 = `
+CREATE TABLE IF NOT EXISTS routing_model_catalogs (
+  adapter_id TEXT PRIMARY KEY, adapter_version TEXT NOT NULL, installed_version TEXT NOT NULL,
+  checked_at TEXT NOT NULL, expires_at TEXT NOT NULL, models_json TEXT NOT NULL
+);
+UPDATE app_meta SET value='5' WHERE key='schema_version';
+`
+
 export interface OpenDatabaseOptions {
   path?: string
   localAppData?: string
@@ -123,6 +164,8 @@ export async function openFindMnemoDatabase(options: OpenDatabaseOptions = {}): 
     if (currentVersion < 1) runTransaction(db, () => db.exec(MIGRATION_001))
     if (currentVersion < 2) runTransaction(db, () => db.exec(MIGRATION_002))
     if (currentVersion < 3) runTransaction(db, () => db.exec(MIGRATION_003))
+    if (currentVersion < 4) runTransaction(db, () => db.exec(MIGRATION_004))
+    if (currentVersion < 5) runTransaction(db, () => db.exec(MIGRATION_005))
     recoverInterruptedRuns(db)
   } catch (cause) {
     db.close()

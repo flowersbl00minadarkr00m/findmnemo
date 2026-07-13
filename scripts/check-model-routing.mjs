@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 
 import {
   BUILT_IN_ROUTING_CAPABILITIES,
   MODEL_ROUTING_CATALOG_VERSION,
   MODEL_ROUTING_POLICY_PROFILE,
   MODEL_ROUTING_SCHEMA_VERSION,
+  OPERATIONAL_ROUTING_POLICY_PROFILE,
+  OPERATIONAL_ROUTING_SCHEMA_VERSION,
   ROUTING_INFERENCE_RULE_VERSION,
   buildEffectiveRouteOrder,
   confirmRoutingRecommendation,
@@ -12,11 +15,15 @@ import {
   createModelRouteId,
   findEquivalentBuiltInRoutingCapabilityId,
   getModelRoutingPolicyRevision,
+  getOperationalRoutingPolicyRevision,
   inferRequiredCapabilities,
+  migrateModelRoutingPolicyV1ToV2,
   normalizeCapabilityId,
   overridePartialRoute,
+  preflightOperationalRoute,
   recommendModelRoute,
   validateModelRoutingPolicy,
+  validateOperationalRoutingPolicy,
 } from '../src/lib/model-routing.ts'
 import {
   MODEL_ROUTING_POLICY_STORAGE_KEY,
@@ -45,6 +52,12 @@ function assertInvalid(policy, expectedCode, label) {
   )
   assert.equal(result.policy, undefined, `${label}: invalid input must not expose a policy`)
   return result
+}
+
+function assertOperationalValid(policy, label) {
+  const result = validateOperationalRoutingPolicy(policy)
+  assert.equal(result.valid, true, `${label}: ${JSON.stringify(result.issues)}`)
+  return result.policy
 }
 
 function clone(value) {
@@ -218,6 +231,52 @@ const credentialValueResult = assertInvalid(
 )
 assert.ok(credentialValueResult.issues.some((issue) => issue.path === '$.routes[0].displayName'))
 assert.ok(!JSON.stringify(credentialValueResult.issues).includes(credentialValue.routes[0].displayName))
+
+assert.equal(OPERATIONAL_ROUTING_SCHEMA_VERSION, '2.0.0')
+assert.equal(OPERATIONAL_ROUTING_POLICY_PROFILE, 'findmnemo.model-routing.v2')
+const operationalPreview = migrateModelRoutingPolicyV1ToV2(representativePolicy, 1)
+const operationalPolicy = assertOperationalValid(operationalPreview.policy, 'v1-to-v2 operational preview')
+assert.equal(operationalPreview.sourcePolicyRevision, getModelRoutingPolicyRevision(representativePolicy))
+assert.deepEqual(operationalPolicy.defaultProfileOrder, representativePolicy.defaultRouteOrder)
+assert.deepEqual(
+  operationalPolicy.capabilityOverrides.map((override) => override.profileOrder),
+  representativePolicy.capabilityOverrides.map((override) => override.routeOrder),
+)
+assert.ok(operationalPolicy.profiles.every((profile) => profile.behavior === 'recommend'))
+assert.ok(operationalPolicy.profiles.every((profile) => profile.readiness.state === 'unchecked'))
+assert.ok(operationalPolicy.profiles.every((profile) => profile.effort === null))
+
+const readyOperational = clone(operationalPolicy)
+const selectedOperationalProfile = readyOperational.profiles.find((profile) => profile.id === 'route:custom')
+selectedOperationalProfile.destinationAdapterId = 'pi-rpc'
+selectedOperationalProfile.destinationInstanceId = 'pi:default'
+selectedOperationalProfile.behavior = 'auto-exact'
+selectedOperationalProfile.readiness = {
+  state: 'ready',
+  checkedAt: NOW,
+  expiresAt: '2026-07-10T19:00:00.000Z',
+  adapterVersion: '1.0.0',
+  installedVersion: '0.80.3',
+  reasonCode: null,
+}
+const operationalPreflight = preflightOperationalRoute({
+  policy: readyOperational,
+  requiredCapabilityIds: [importedCapability.id],
+  classificationSource: 'user-confirmed',
+  classificationAmbiguous: false,
+  override: { mode: 'none' },
+  now: '2026-07-10T18:30:00.000Z',
+})
+assert.equal(operationalPreflight.status, 'auto-dispatch-eligible')
+assert.equal(operationalPreflight.selectedProfileId, 'route:custom')
+assert.equal(operationalPreflight.policyRevision, getOperationalRoutingPolicyRevision(readyOperational))
+
+const operationalCredential = clone(operationalPolicy)
+operationalCredential.profiles[0].accessToken = 'not-echoed'
+const operationalCredentialResult = validateOperationalRoutingPolicy(operationalCredential)
+assert.equal(operationalCredentialResult.valid, false)
+assert.ok(operationalCredentialResult.issues.some((issue) => issue.code === 'prohibited-credential-field'))
+assert.ok(!JSON.stringify(operationalCredentialResult.issues).includes('not-echoed'))
 
 assert.equal(ROUTING_INFERENCE_RULE_VERSION, '1.0.0')
 const inferred = inferRequiredCapabilities({
@@ -569,4 +628,17 @@ for (const privateMarker of [
   assert.equal(evidenceSerialization.includes(privateMarker), false, `routing evidence leaked ${privateMarker}`)
 }
 
-console.log('Model routing checks passed: policy engine, staged portability, decisions, telemetry evidence, and credential privacy.')
+const guidedRoutingSource = readFileSync(new URL('../src/components/routing/GuidedRoutingSetup.tsx', import.meta.url), 'utf8')
+const dispatchHistorySource = readFileSync(new URL('../src/components/routing/DispatchHistory.tsx', import.meta.url), 'utf8')
+const chatHarnessSource = readFileSync(new URL('./verify-chat-routing.mjs', import.meta.url), 'utf8')
+for (const requiredText of ['Detection did not enable a profile', 'Enable this profile', 'Delegate only on a clear exact match', 'Backup order']) {
+  assert.ok(guidedRoutingSource.includes(requiredText), `Guided routing release control is missing: ${requiredText}`)
+}
+for (const requiredText of ['Requested route', 'Actual route', 'Retry as new generation', 'Prompts, responses, credentials']) {
+  assert.ok(dispatchHistorySource.includes(requiredText), `Dispatch history release control is missing: ${requiredText}`)
+}
+for (const requiredText of ['codex-mcp', 'claude-code-mcp', 'duplicateProtected', 'privateCanariesPersisted']) {
+  assert.ok(chatHarnessSource.includes(requiredText), `Integrated chat-routing gate is missing: ${requiredText}`)
+}
+
+console.log('Model routing checks passed: policy engine, guided controls, dispatch evidence, integrated gate, portability, telemetry, and credential privacy.')

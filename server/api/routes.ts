@@ -5,6 +5,10 @@ import {
   COMPANION_PROTOCOL_VERSION,
   SOURCE_IDS,
   type CompanionIdentityDto,
+  type OperationalPolicyMigrationPreview,
+  type OperationalRoutingPolicy,
+  isRoutingClassificationSource,
+  type RoutingRequestOverride,
   type SourceId,
 } from '../../shared/companion-contract.js'
 import { apiFailure, apiSuccess, sendJson } from './http.js'
@@ -16,6 +20,11 @@ import type { ReconciliationEngine } from '../reconciliation/engine.js'
 import type { SafeLogger } from '../observability/logger.js'
 import type { SourceRunCapabilityReport } from '../../shared/companion-contract.js'
 import { createDiagnosticExport } from '../diagnostics/export.js'
+import type { RoutingRepository } from '../routing/routing-repository.js'
+import type { DiscoveryService } from '../routing/discovery-service.js'
+import type { PiRoutingAdapter } from '../routing/adapters/pi-rpc-adapter.js'
+import type { DispatchService } from '../routing/dispatch-service.js'
+import type { RoutingIntegrationApi } from '../routing/integration-api.js'
 import {
   allowedOrigin,
   applyCors,
@@ -35,6 +44,11 @@ export interface RouteDependencies {
   localBootstrapNonce: string
   databasePath: string
   operationalRepository: OperationalRepository
+  routingRepository: RoutingRepository
+  discoveryService: DiscoveryService
+  piRoutingAdapter: PiRoutingAdapter
+  dispatchService: DispatchService
+  routingIntegrationApi?: RoutingIntegrationApi
   gmailServices: GmailServices
   gmailCheckService: GmailCheckService
   reconciliationEngine: ReconciliationEngine
@@ -101,6 +115,46 @@ async function handleApi(
 
   if (url.pathname === '/api/v1/identity' && request.method === 'GET') {
     sendJson(response, 200, apiSuccess(dependencies.identity))
+    return
+  }
+
+  if (url.pathname === '/api/v1/integration/routing/recommend' && request.method === 'POST') {
+    if (!dependencies.routingIntegrationApi) { sendJson(response, 503, apiFailure({ code: 'CREDENTIAL_STORE_UNAVAILABLE', message: 'Routing integration credentials are unavailable.', retryable: true })); return }
+    try {
+      const body = await readJsonBody(request)
+      const input = routingInput(body)
+      sendJson(response, 200, apiSuccess(await dependencies.routingIntegrationApi.recommend(headerString(request, 'x-findmnemo-routing-token'), input)))
+    } catch (cause) { integrationFailure(response, cause) }
+    return
+  }
+
+  if (url.pathname === '/api/v1/integration/routing/dispatch' && request.method === 'POST') {
+    if (!dependencies.routingIntegrationApi) { sendJson(response, 503, apiFailure({ code: 'CREDENTIAL_STORE_UNAVAILABLE', message: 'Routing integration credentials are unavailable.', retryable: true })); return }
+    try {
+      const body = await readJsonBody(request)
+      const input = routingInput(body)
+      if (typeof body.task !== 'string' || typeof body.idempotencyKey !== 'string' || !isRecord(body.origin)) throw new Error('INVALID_REQUEST')
+      const origin = body.origin
+      if (typeof origin.adapterId !== 'string' || typeof origin.correlationId !== 'string' || (origin.conversationRefHash !== null && typeof origin.conversationRefHash !== 'string')) throw new Error('INVALID_REQUEST')
+      const result = await dependencies.routingIntegrationApi.dispatch(headerString(request, 'x-findmnemo-routing-token'), { ...input, task: body.task, idempotencyKey: body.idempotencyKey, origin: { adapterId: origin.adapterId, correlationId: origin.correlationId, conversationRefHash: origin.conversationRefHash }, timeoutMs: typeof body.timeoutMs === 'number' ? body.timeoutMs : undefined, retryOfReceiptId: typeof body.retryOfReceiptId === 'string' ? body.retryOfReceiptId : undefined })
+      sendJson(response, 200, apiSuccess(result))
+    } catch (cause) { integrationFailure(response, cause) }
+    return
+  }
+
+  const integrationReceiptMatch = url.pathname.match(/^\/api\/v1\/integration\/routing\/dispatches\/([^/]+)(?:\/(cancel|delivered))?$/)
+  if (integrationReceiptMatch) {
+    if (!dependencies.routingIntegrationApi) { sendJson(response, 503, apiFailure({ code: 'CREDENTIAL_STORE_UNAVAILABLE', message: 'Routing integration credentials are unavailable.', retryable: true })); return }
+    try {
+      const token = headerString(request, 'x-findmnemo-routing-token')
+      const receiptId = decodeURIComponent(integrationReceiptMatch[1])
+      const action = integrationReceiptMatch[2]
+      const data = action === 'cancel' && request.method === 'POST' ? await dependencies.routingIntegrationApi.cancel(token, receiptId)
+        : action === 'delivered' && request.method === 'POST' ? await dependencies.routingIntegrationApi.acknowledgeDelivery(token, receiptId)
+          : !action && request.method === 'GET' ? await dependencies.routingIntegrationApi.read(token, receiptId) : undefined
+      if (data === undefined) throw new Error('INVALID_REQUEST')
+      sendJson(response, 200, apiSuccess(data))
+    } catch (cause) { integrationFailure(response, cause) }
     return
   }
 
@@ -208,6 +262,146 @@ async function handleApi(
   if (url.pathname === '/api/v1/diagnostics/export' && request.method === 'GET') {
     if (!authorizePrivate(request, response, dependencies)) return
     sendJson(response, 200, apiSuccess(await createDiagnosticExport({ logger: dependencies.logger, databasePath: dependencies.databasePath, companionVersion: dependencies.identity.companionVersion })))
+    return
+  }
+
+  if (url.pathname === '/api/v1/routing/policy' && request.method === 'GET') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    sendJson(response, 200, apiSuccess({ policy: dependencies.routingRepository.readPolicy() }))
+    return
+  }
+
+  if (url.pathname === '/api/v1/routing/dispatches' && request.method === 'GET') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    sendJson(response, 200, apiSuccess(dependencies.routingRepository.listDispatchReceipts()))
+    return
+  }
+
+  const pairedDispatchAction = url.pathname.match(/^\/api\/v1\/routing\/dispatches\/([^/]+)\/(cancel|retry)$/)
+  if (pairedDispatchAction && request.method === 'POST') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    const receiptId = decodeURIComponent(pairedDispatchAction[1])
+    if (pairedDispatchAction[2] === 'cancel') {
+      const receipt = dependencies.dispatchService.cancel(receiptId)
+      if (!receipt) sendJson(response, 404, apiFailure({ code: 'ROUTING_DISPATCH_NOT_FOUND', message: 'Dispatch receipt was not found.', retryable: false }))
+      else sendJson(response, 200, apiSuccess(receipt))
+      return
+    }
+    const idempotencyKey = headerString(request, 'idempotency-key')
+    if (!idempotencyKey) {
+      sendJson(response, 400, apiFailure({ code: 'INVALID_REQUEST', message: 'Retry requires a new idempotency key.', retryable: false }))
+      return
+    }
+    const result = await dependencies.dispatchService.retry(receiptId, idempotencyKey)
+    if (!result.receipt || result.reasonCode === 'RETRY_NOT_ALLOWED' || result.reasonCode === 'RESULT_CONTENT_UNAVAILABLE') {
+      const code = result.reasonCode === 'RESULT_CONTENT_UNAVAILABLE' ? 'RESULT_CONTENT_UNAVAILABLE' : 'RETRY_NOT_ALLOWED'
+      sendJson(response, 409, apiFailure({ code, message: code === 'RESULT_CONTENT_UNAVAILABLE' ? 'The original task is no longer available in companion memory. Retry it from the originating chat.' : 'This dispatch state cannot be retried.', retryable: false }))
+      return
+    }
+    sendJson(response, 200, apiSuccess(result.receipt))
+    return
+  }
+
+  if (url.pathname === '/api/v1/routing/dispatches' && request.method === 'POST') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    sendJson(response, 403, apiFailure({ code: 'ORIGIN_NOT_ALLOWED', message: 'Dispatch requires a scoped local chat integration. Paired browser sessions cannot send work.', retryable: false }))
+    return
+  }
+
+  if (url.pathname === '/api/v1/routing/destinations/discover' && request.method === 'POST') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    const discovery = await dependencies.discoveryService.discover()
+    sendJson(response, 200, apiSuccess(discovery))
+    return
+  }
+
+  if (url.pathname === '/api/v1/routing/destinations/pi-rpc/catalog' && request.method === 'GET') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    const catalog = dependencies.routingRepository.readCatalog('pi-rpc')
+    if (!catalog) sendJson(response, 404, apiFailure({ code: 'ROUTING_DESTINATION_UNAVAILABLE', message: 'The Pi model catalog has not been checked.', retryable: true }))
+    else sendJson(response, 200, apiSuccess(catalog))
+    return
+  }
+
+  if (url.pathname === '/api/v1/routing/destinations/pi-rpc/catalog' && request.method === 'POST') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    try {
+      const catalog = await dependencies.piRoutingAdapter.listModels(AbortSignal.timeout(10_000))
+      dependencies.routingRepository.saveCatalog(catalog)
+      sendJson(response, 200, apiSuccess(catalog))
+    } catch {
+      sendJson(response, 503, apiFailure({ code: 'ROUTING_DESTINATION_UNAVAILABLE', message: 'Pi catalog check failed. Check installation, authentication, and version, then retry.', retryable: true }))
+    }
+    return
+  }
+
+  const profileValidationMatch = url.pathname.match(/^\/api\/v1\/routing\/profiles\/([^/]+)\/validate$/)
+  if (profileValidationMatch && request.method === 'POST') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    try {
+      const body = await readJsonBody(request)
+      const expectedPolicyVersion = Number(body.expectedPolicyVersion)
+      const profileId = decodeURIComponent(profileValidationMatch[1])
+      const policy = dependencies.routingRepository.readPolicy()
+      const profile = policy?.profiles.find((candidate) => candidate.id === profileId)
+      if (!profile || !Number.isInteger(expectedPolicyVersion)) throw new Error('ROUTING_PROFILE_NOT_FOUND')
+      const readiness = await dependencies.piRoutingAdapter.validate(profile, AbortSignal.timeout(10_000))
+      const saved = dependencies.routingRepository.applyReadiness(profileId, readiness, expectedPolicyVersion)
+      if (saved.status === 'conflict') {
+        sendJson(response, 409, apiFailure({ code: 'ROUTING_POLICY_CONFLICT', message: 'The routing policy changed before validation completed.', retryable: true }))
+        return
+      }
+      sendJson(response, 200, apiSuccess({ readiness, policy: saved.policy }))
+    } catch {
+      sendJson(response, 404, apiFailure({ code: 'ROUTING_PROFILE_NOT_FOUND', message: 'The requested routing profile was not found.', retryable: false }))
+    }
+    return
+  }
+
+  if (url.pathname === '/api/v1/routing/policy' && request.method === 'PUT') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    try {
+      const body = await readJsonBody(request)
+      const expectedPolicyVersion = body.expectedPolicyVersion === null ? null : Number(body.expectedPolicyVersion)
+      if (expectedPolicyVersion !== null && (!Number.isInteger(expectedPolicyVersion) || expectedPolicyVersion < 0)) throw new Error('ROUTING_POLICY_INVALID')
+      const result = dependencies.routingRepository.compareAndSetPolicy(body.policy as OperationalRoutingPolicy, expectedPolicyVersion)
+      if (result.status === 'conflict') {
+        sendJson(response, 409, apiFailure({ code: 'ROUTING_POLICY_CONFLICT', message: 'The routing policy changed. Reload it before saving.', retryable: true }))
+        return
+      }
+      dependencies.operationalRepository.appendAudit({ timestamp: dependencies.clock().toISOString(), action: 'routing-policy-update', objectRefs: [`policy-version:${result.policy.policyVersion}`], result: 'saved' })
+      sendJson(response, 200, apiSuccess(result.policy))
+    } catch {
+      sendJson(response, 400, apiFailure({ code: 'ROUTING_POLICY_INVALID', message: 'The routing policy is invalid or contains private data.', retryable: false }))
+    }
+    return
+  }
+
+  if (url.pathname === '/api/v1/routing/policy/export-v1' && request.method === 'GET') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    const policy = dependencies.routingRepository.exportV1Compatible()
+    if (!policy) sendJson(response, 404, apiFailure({ code: 'ROUTING_POLICY_NOT_FOUND', message: 'No operational routing policy has been created.', retryable: false }))
+    else sendJson(response, 200, apiSuccess(policy))
+    return
+  }
+
+  if ((url.pathname === '/api/v1/routing/migration/preview' || url.pathname === '/api/v1/routing/migration/commit') && request.method === 'POST') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    try {
+      const body = await readJsonBody(request)
+      const preview = body.preview as unknown as OperationalPolicyMigrationPreview
+      if (url.pathname.endsWith('/preview')) {
+        sendJson(response, 200, apiSuccess(dependencies.routingRepository.previewMigration(preview)))
+        return
+      }
+      if (!headerString(request, 'idempotency-key')) throw new Error('ROUTING_MIGRATION_INVALID')
+      const policy = dependencies.routingRepository.commitMigration(preview, dependencies.clock().toISOString())
+      dependencies.operationalRepository.appendAudit({ timestamp: dependencies.clock().toISOString(), action: 'routing-policy-migration', objectRefs: [`policy-version:${policy.policyVersion}`], result: 'committed' })
+      sendJson(response, 200, apiSuccess(policy))
+    } catch (cause) {
+      const exists = cause instanceof Error && cause.message === 'ROUTING_POLICY_EXISTS'
+      sendJson(response, exists ? 409 : 400, apiFailure({ code: exists ? 'ROUTING_POLICY_CONFLICT' : 'ROUTING_MIGRATION_INVALID', message: exists ? 'An operational routing policy already exists.' : 'The routing migration preview is invalid.', retryable: false }))
+    }
     return
   }
 
@@ -514,6 +708,27 @@ function auditPairing(dependencies: RouteDependencies, action: string, reasonCod
   })
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function routingInput(body: Record<string, unknown>) {
+  if (!Array.isArray(body.capabilityIds) || !body.capabilityIds.every((value) => typeof value === 'string') || !isRoutingClassificationSource(body.classificationSource) || typeof body.classificationAmbiguous !== 'boolean') throw new Error('INVALID_REQUEST')
+  let override: RoutingRequestOverride = { mode: 'none' }
+  if (isRecord(body.override)) {
+    if (body.override.mode === 'self') override = { mode: 'self' }
+    else if (body.override.mode === 'include' && typeof body.override.profileId === 'string') override = { mode: 'include', profileId: body.override.profileId }
+    else if (body.override.mode === 'exclude' && Array.isArray(body.override.profileIds) && body.override.profileIds.every((value) => typeof value === 'string')) override = { mode: 'exclude', profileIds: body.override.profileIds as string[] }
+    else if (body.override.mode !== 'none') throw new Error('INVALID_REQUEST')
+  }
+  return { capabilityIds: body.capabilityIds as string[], classificationSource: body.classificationSource, classificationAmbiguous: body.classificationAmbiguous, override }
+}
+
+function integrationFailure(response: ServerResponse, cause: unknown): void {
+  const unauthorized = cause instanceof Error && cause.message === 'ROUTING_INTEGRATION_UNAUTHORIZED'
+  sendJson(response, unauthorized ? 401 : 400, apiFailure({ code: unauthorized ? 'ROUTING_INTEGRATION_UNAUTHORIZED' : 'INVALID_REQUEST', message: unauthorized ? 'Routing integration authentication failed.' : 'Routing integration request is invalid.', retryable: false }))
+}
+
 function gmailErrorCode(cause: unknown): 'OAUTH_DENIED' | 'OAUTH_TIMEOUT' | 'OAUTH_STATE_MISMATCH' | 'GMAIL_NOT_CONFIGURED' | 'GMAIL_REFRESH_FAILED' | 'CREDENTIAL_STORE_UNAVAILABLE' | 'CREDENTIAL_PERMISSION_REQUIRED' | 'NATIVE_ADAPTER_UNSUPPORTED' | 'INTERNAL_ERROR' {
   const message = cause instanceof Error ? cause.message : ''
   if (message === 'OAUTH_DENIED' || message === 'OAUTH_TIMEOUT' || message === 'OAUTH_STATE_MISMATCH' || message === 'GMAIL_NOT_CONFIGURED' || message === 'GMAIL_REFRESH_FAILED' || message === 'CREDENTIAL_STORE_UNAVAILABLE' || message === 'CREDENTIAL_PERMISSION_REQUIRED' || message === 'NATIVE_ADAPTER_UNSUPPORTED') return message
@@ -567,7 +782,11 @@ function headerString(request: IncomingMessage, name: string): string | undefine
 }
 
 async function serveSpa(response: ServerResponse, pathname: string, distPath: string, issueLocalBootstrap: () => string): Promise<void> {
-  const isAppRoute = pathname === '/' || pathname === '/app' || pathname.startsWith('/app/')
+  const isAppRoute = pathname === '/'
+    || pathname === '/app'
+    || pathname.startsWith('/app/')
+    || pathname === '/demo'
+    || pathname.startsWith('/demo/')
   const requestedPath = isAppRoute ? 'index.html' : pathname.replace(/^\/+/, '')
   const root = resolve(distPath)
   const filePath = resolve(root, requestedPath)

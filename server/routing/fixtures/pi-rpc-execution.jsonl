@@ -1,0 +1,5 @@
+{"id":"model-fixture","type":"response","command":"set_model","success":true,"data":{"provider":"openrouter","id":"cohere/north-mini-code:free"}}
+{"id":"effort-fixture","type":"response","command":"set_thinking_level","success":true}
+{"id":"state-fixture","type":"response","command":"get_state","success":true,"data":{"model":{"provider":"openrouter","id":"cohere/north-mini-code:free"},"thinkingLevel":"high","isStreaming":false}}
+{"id":"prompt-fixture","type":"response","command":"prompt","success":true}
+{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"SANITIZED_RESULT_FIXTURE"}],"provider":"openrouter","model":"cohere/north-mini-code:free","stopReason":"stop"}],"willRetry":false}

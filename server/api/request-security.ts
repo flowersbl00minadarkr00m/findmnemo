@@ -28,7 +28,7 @@ export function applyCors(response: ServerResponse, origin: string): void {
   response.setHeader('Access-Control-Allow-Origin', origin)
   response.setHeader('Vary', 'Origin')
   response.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS')
-  response.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Idempotency-Key, X-FindMnemo-Protocol-Version, X-FindMnemo-Browser-Nonce')
+  response.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Idempotency-Key, X-FindMnemo-Protocol-Version, X-FindMnemo-Browser-Nonce, X-FindMnemo-Routing-Token')
 }
 
 export function validLoopbackHost(request: IncomingMessage): boolean {

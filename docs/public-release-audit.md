@@ -1,8 +1,8 @@
 # Public release audit
 
-> Audited: 2026-07-12
-> Scope: local candidate tree and existing four-commit Git history
-> Publication action: not performed
+> Audited: 2026-07-13
+> Scope: integrated public candidate tree and the canonical private Git history
+> Publication action: authorized for the sanitized public repository at `flowersbl00minadarkr00m/findmnemo`
 
 ## Candidate tree
 
@@ -21,6 +21,10 @@ Do not publish or mirror the current `.git` history. T8 must create a clean publ
 
 ## Known release limitations
 
-- macOS and Ubuntu rows remain experimental until T8 clean-host keyring, Gmail, lifecycle, update, and recovery evidence passes.
-- The Windows installer remains an unsigned preview.
-- No Git remote is currently configured, so no external source or release publication occurred.
+- macOS and Ubuntu rows remain experimental. Full clean-host keyring, Gmail, lifecycle, update, and recovery certification was explicitly deferred on 2026-07-13.
+- The Windows installer remains an unsigned preview. Paid signing and signed-release certification were explicitly deferred on 2026-07-13.
+- The canonical private checkout intentionally has no remote. Publication uses the separate sanitized public-repository lineage so its private history is never pushed.
+
+## Local release candidate
+
+A clean single-commit snapshot with generic release identity was created and verified independently from the private working history. Its 225-file source archive and clownfish-branded Windows unsigned-preview checksum/provenance are recorded in `release-evidence/findmnemo-0.1.0-rc.json` and `release-evidence/SHA256SUMS.txt`. The artifacts themselves remain under ignored `release-desktop/`; this is a local candidate, not an external release or a completed cross-platform support claim.

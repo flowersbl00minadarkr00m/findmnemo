@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "release": "0.1.0-rc",
+  "localTag": "v0.1.0-rc.1",
+  "createdAt": "2026-07-13T02:47:06.2357024Z",
+  "publicationStatus": "local-candidate-only",
+  "source": {
+    "revision": "2d518d22666fafa766d3ea87aabb816b7cb7afe1",
+    "history": "single sanitized local snapshot commit",
+    "artifact": "FindMnemo-0.1.0-source.zip",
+    "bytes": 781443,
+    "files": 225,
+    "sha256": "e2280475e7da221ef02779f95eccd0bd411f570a62c9ea00a8c9f2e9201d5dc7"
+  },
+  "gitBundle": {
+    "artifact": "FindMnemo-0.1.0-rc.1.bundle",
+    "bytes": 753072,
+    "sha256": "8f27faac2a384c00ede0fd30a9aee1bb2957a5c59c1f21b751b106bdebc12cae",
+    "contains": ["refs/heads/main", "refs/tags/v0.1.0-rc.1", "HEAD"],
+    "verification": "git bundle verify passed with one complete sanitized commit"
+  },
+  "windowsPreview": {
+    "artifact": "FindMnemo-Companion-0.1.0-x64.exe",
+    "bytes": 105790675,
+    "sha256": "dcb8aba1a319221cb339ad6d135c82af0c41ce45993a3b894ab16f15f0ee0c80",
+    "architecture": "x64 payload in NSIS bootstrapper",
+    "signatureStatus": "NotSigned",
+    "label": "Unsigned preview",
+    "installScope": "per-user",
+    "normalElevation": false,
+    "productionReady": false
+  },
+  "verification": {
+    "lockedInstall": "passed",
+    "testFiles": 38,
+    "tests": 194,
+    "workflowChecks": 25,
+    "desktopBoundaryChecks": 25,
+    "publicBoundary": "passed with prohibited negative fixtures rejected",
+    "localPrivateBoundary": "passed",
+    "sourceBuildAndSmoke": "passed",
+    "windowsPackageVerification": "passed as unsigned development artifact with the FindMnemo clownfish icon"
+  },
+  "unverified": [
+    "hosted GitHub Actions matrix",
+    "clean macOS Intel and Apple-silicon lifecycle with real Keychain and Gmail OAuth",
+    "clean Ubuntu x64 and arm64 desktop lifecycle with real Secret Service and Gmail OAuth",
+    "external publication"
+  ]
+}

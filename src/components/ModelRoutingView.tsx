@@ -27,12 +27,16 @@ import {
   stageModelRoutingPolicyImport,
 } from '../lib/model-routing-storage'
 import { recordRoutingDecision } from '../lib/model-routing-evidence'
+import type { OperationalRepository } from '../lib/operational-repository'
+import { GuidedRoutingSetup } from './routing/GuidedRoutingSetup'
+import { DispatchHistory } from './routing/DispatchHistory'
 
-interface Props {
+export interface ModelRoutingViewProps {
   policy: ModelRoutingPolicy
   loadIssue?: string
   ticket?: Ticket
   onPolicyChange: (policy: ModelRoutingPolicy) => void
+  operationalRepository?: OperationalRepository
 }
 
 const ROUTE_KINDS: Array<{ value: ModelRouteKind; label: string }> = [
@@ -67,7 +71,7 @@ function describeRoute(route: ModelRouteTarget): string {
   return [route.provider, route.model, route.surface].filter(Boolean).join(' / ')
 }
 
-export function ModelRoutingView({ policy, loadIssue, ticket, onPolicyChange }: Props) {
+export function AdvancedRoutingPolicy({ policy, loadIssue, ticket, onPolicyChange }: ModelRoutingViewProps) {
   const [draft, setDraft] = useState(() => clonePolicy(policy))
   const [capabilityQuery, setCapabilityQuery] = useState('')
   const [customCapabilityLabel, setCustomCapabilityLabel] = useState('')
@@ -752,6 +756,45 @@ export function ModelRoutingView({ policy, loadIssue, ticket, onPolicyChange }: 
           </div>
         )}
       </section>
+    </section>
+  )
+}
+
+export function ModelRoutingView(props: ModelRoutingViewProps) {
+  const [mode, setMode] = useState<'guided' | 'advanced'>(() => props.ticket ? 'advanced' : 'guided')
+
+  return (
+    <section className="space-y-5" aria-labelledby="routing-page-heading">
+      <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between xl:flex-nowrap">
+        <div className="min-w-0 flex-1">
+          <p className="text-[10px] font-mono uppercase tracking-[0.18em] text-sync">Local routing preferences</p>
+          <h1 id="routing-page-heading" className="mt-1 text-2xl font-semibold text-chrome-ink">Choose who handles each kind of work</h1>
+          <p className="mt-1 max-w-3xl text-sm text-chrome-mut">
+            Start with a plain-language setup. Advanced keeps every detailed route, capability, order, import, and export control from Spec 004.
+          </p>
+        </div>
+        <div className="inline-flex w-full shrink-0 rounded-sm border border-chrome-line bg-chrome p-1 sm:w-auto" role="tablist" aria-label="Routing setup mode">
+          {(['guided', 'advanced'] as const).map((value) => (
+            <button
+              key={value}
+              type="button"
+              role="tab"
+              aria-selected={mode === value}
+              onClick={() => setMode(value)}
+              className={`min-h-10 flex-1 rounded-sm px-4 py-2 text-xs font-semibold capitalize sm:flex-none ${mode === value ? 'bg-sync text-white' : 'text-chrome-mut hover:text-chrome-ink'}`}
+            >
+              {value}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {mode === 'guided' ? (
+        <GuidedRoutingSetup legacyPolicy={props.policy} operationalRepository={props.operationalRepository} />
+      ) : (
+        <AdvancedRoutingPolicy {...props} />
+      )}
+      <DispatchHistory operationalRepository={props.operationalRepository} />
     </section>
   )
 }

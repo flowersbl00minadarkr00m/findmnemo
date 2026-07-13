@@ -4,9 +4,15 @@ import type {
   ModelRoutingRecommendationInput,
   ModelRoutingValidationIssue,
   ModelRoutingValidationResult,
+  OperationalPolicyMigrationPreview,
+  OperationalRoutingPolicy,
+  OperationalRoutingValidationResult,
   RoutingCapabilityDefinition,
   RoutingCapabilityInferenceResult,
   RoutingDecisionRecord,
+  RoutingExecutionProfile,
+  RoutingPreflightRequest,
+  RoutingPreflightResult,
   RoutingRecommendationResult,
   Ticket,
 } from '../types'
@@ -15,6 +21,8 @@ export const MODEL_ROUTING_SCHEMA_VERSION = '1.0.0' as const
 export const MODEL_ROUTING_POLICY_PROFILE = 'findmnemo.model-routing.v1' as const
 export const MODEL_ROUTING_CATALOG_VERSION = '1.0.0' as const
 export const ROUTING_INFERENCE_RULE_VERSION = '1.0.0' as const
+export const OPERATIONAL_ROUTING_SCHEMA_VERSION = '2.0.0' as const
+export const OPERATIONAL_ROUTING_POLICY_PROFILE = 'findmnemo.model-routing.v2' as const
 
 const BUILT_IN_CAPABILITY_EQUIVALENCE_ALIASES: Readonly<Record<string, string>> = {
   code: 'engineering.coding',
@@ -224,6 +232,39 @@ const ROUTE_KEYS = [
 const AVAILABILITY_KEYS = ['state', 'confirmedAt'] as const
 const CAPABILITY_KEYS = ['id', 'family', 'label', 'description', 'origin'] as const
 const OVERRIDE_KEYS = ['capabilityId', 'routeOrder'] as const
+const OPERATIONAL_POLICY_KEYS = [
+  'schemaVersion',
+  'policyProfile',
+  'policyVersion',
+  'updatedAt',
+  'capabilities',
+  'profiles',
+  'defaultProfileOrder',
+  'capabilityOverrides',
+] as const
+const EXECUTION_PROFILE_KEYS = [
+  'id',
+  'displayName',
+  'destinationAdapterId',
+  'destinationInstanceId',
+  'providerId',
+  'modelId',
+  'effort',
+  'capabilityIds',
+  'enabled',
+  'behavior',
+  'fallbackOrder',
+  'readiness',
+] as const
+const PROFILE_READINESS_KEYS = [
+  'state',
+  'checkedAt',
+  'expiresAt',
+  'adapterVersion',
+  'installedVersion',
+  'reasonCode',
+] as const
+const OPERATIONAL_OVERRIDE_KEYS = ['capabilityId', 'profileOrder'] as const
 
 const CAPABILITY_FAMILIES = new Set([
   'orchestration',
@@ -236,6 +277,15 @@ const CAPABILITY_FAMILIES = new Set([
 const CAPABILITY_ORIGINS = new Set(['built-in', 'custom', 'imported'])
 const ROUTE_KINDS = new Set(['hosted', 'local', 'agent-surface', 'custom'])
 const AVAILABILITY_STATES = new Set(['available', 'unavailable'])
+const PROFILE_BEHAVIORS = new Set(['recommend', 'auto-exact'])
+const PROFILE_READINESS_STATES = new Set([
+  'unchecked',
+  'ready',
+  'stale',
+  'unavailable',
+  'unsupported',
+  'auth-required',
+])
 const STABLE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/
 const CREDENTIAL_FIELD_PATTERN = /(?:api|access|refresh|session)[_-]?(?:key|token)|authorization|bearer|cookie|pass(?:word|wd)?|secret/i
 const CREDENTIAL_VALUE_PATTERNS = [
@@ -387,6 +437,32 @@ function checkTimestamp(value: unknown, path: string, issues: ModelRoutingValida
   if (Number.isNaN(date.getTime()) || date.toISOString() !== timestamp) {
     addIssue(issues, 'invalid-timestamp', path, 'Expected an ISO 8601 UTC timestamp with milliseconds.')
   }
+}
+
+function checkNullableTimestamp(value: unknown, path: string, issues: ModelRoutingValidationIssue[]) {
+  if (value === null) return
+  checkTimestamp(value, path, issues)
+}
+
+function requireNullableString(
+  value: unknown,
+  path: string,
+  issues: ModelRoutingValidationIssue[],
+): string | null | undefined {
+  if (value === null) return null
+  return requireString(value, path, issues)
+}
+
+function requireNonNegativeInteger(
+  value: unknown,
+  path: string,
+  issues: ModelRoutingValidationIssue[],
+): number | undefined {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    addIssue(issues, 'invalid-non-negative-integer', path, 'Expected a non-negative integer.')
+    return undefined
+  }
+  return value
 }
 
 function requireStringArray(
@@ -660,6 +736,363 @@ export function validateModelRoutingPolicy(input: unknown): ModelRoutingValidati
 
   if (issues.length > 0) return { valid: false, issues }
   return { valid: true, issues, policy: input as ModelRoutingPolicy }
+}
+
+function validateExecutionProfile(
+  value: unknown,
+  index: number,
+  issues: ModelRoutingValidationIssue[],
+): { id?: string; enabled: boolean; capabilityIds: string[]; fallbackOrder?: number } {
+  const path = `$.profiles[${index}]`
+  const profile = requireRecord(value, path, issues)
+  if (!profile) return { enabled: false, capabilityIds: [] }
+
+  checkUnknownKeys(profile, EXECUTION_PROFILE_KEYS, path, issues)
+  const id = requireStableId(profile.id, `${path}.id`, issues)
+  requireString(profile.displayName, `${path}.displayName`, issues)
+  requireStableId(profile.destinationAdapterId, `${path}.destinationAdapterId`, issues)
+  requireStableId(profile.destinationInstanceId, `${path}.destinationInstanceId`, issues)
+  requireNullableString(profile.providerId, `${path}.providerId`, issues)
+  requireString(profile.modelId, `${path}.modelId`, issues)
+  requireNullableString(profile.effort, `${path}.effort`, issues)
+
+  let enabled = false
+  if (typeof profile.enabled !== 'boolean') {
+    addIssue(issues, 'invalid-boolean', `${path}.enabled`, 'Expected a boolean.')
+  } else {
+    enabled = profile.enabled
+  }
+
+  const behavior = requireString(profile.behavior, `${path}.behavior`, issues)
+  if (behavior !== undefined && !PROFILE_BEHAVIORS.has(behavior)) {
+    addIssue(issues, 'invalid-profile-behavior', `${path}.behavior`, 'Profile behavior must be recommend or auto-exact.')
+  }
+  const fallbackOrder = requireNonNegativeInteger(profile.fallbackOrder, `${path}.fallbackOrder`, issues)
+  const capabilityIds = requireStringArray(profile.capabilityIds, `${path}.capabilityIds`, issues)
+  checkDuplicates(capabilityIds, 'duplicate-capability-assignment', `${path}.capabilityIds`, issues)
+
+  const readiness = requireRecord(profile.readiness, `${path}.readiness`, issues)
+  if (readiness) {
+    checkUnknownKeys(readiness, PROFILE_READINESS_KEYS, `${path}.readiness`, issues)
+    const state = requireString(readiness.state, `${path}.readiness.state`, issues)
+    if (state !== undefined && !PROFILE_READINESS_STATES.has(state)) {
+      addIssue(issues, 'invalid-readiness-state', `${path}.readiness.state`, 'Profile readiness state is not supported.')
+    }
+    checkNullableTimestamp(readiness.checkedAt, `${path}.readiness.checkedAt`, issues)
+    checkNullableTimestamp(readiness.expiresAt, `${path}.readiness.expiresAt`, issues)
+    const adapterVersion = requireNullableString(readiness.adapterVersion, `${path}.readiness.adapterVersion`, issues)
+    const installedVersion = requireNullableString(readiness.installedVersion, `${path}.readiness.installedVersion`, issues)
+    requireNullableString(readiness.reasonCode, `${path}.readiness.reasonCode`, issues)
+
+    if (state === 'ready') {
+      if (readiness.checkedAt === null || readiness.expiresAt === null || adapterVersion == null || installedVersion == null) {
+        addIssue(
+          issues,
+          'incomplete-ready-evidence',
+          `${path}.readiness`,
+          'Ready profiles require checked/expires timestamps and adapter/installed versions.',
+        )
+      }
+      if (profile.destinationAdapterId === 'manual') {
+        addIssue(issues, 'manual-profile-not-controllable', `${path}.destinationAdapterId`, 'Manual profiles cannot be dispatch-ready.')
+      }
+    }
+    if (typeof readiness.checkedAt === 'string' && typeof readiness.expiresAt === 'string') {
+      if (new Date(readiness.expiresAt).getTime() <= new Date(readiness.checkedAt).getTime()) {
+        addIssue(issues, 'invalid-readiness-window', `${path}.readiness.expiresAt`, 'Readiness expiry must be after its check time.')
+      }
+    }
+  }
+
+  return { id, enabled, capabilityIds, fallbackOrder }
+}
+
+export function getOperationalRoutingPolicyRevision(policy: OperationalRoutingPolicy): string {
+  const canonical = canonicalPolicyJson(policy)
+  let hash = 0xcbf29ce484222325n
+  for (let index = 0; index < canonical.length; index += 1) {
+    hash ^= BigInt(canonical.charCodeAt(index))
+    hash = BigInt.asUintN(64, hash * 0x100000001b3n)
+  }
+  return `${policy.policyVersion}:${policy.updatedAt}:${hash.toString(16).padStart(16, '0')}`
+}
+
+export function validateOperationalRoutingPolicy(input: unknown): OperationalRoutingValidationResult {
+  const issues: ModelRoutingValidationIssue[] = []
+  scanForCredentials(input, '$', issues)
+  const policy = requireRecord(input, '$', issues)
+  if (!policy) return { valid: false, issues }
+
+  checkUnknownKeys(policy, OPERATIONAL_POLICY_KEYS, '$', issues)
+  if (policy.schemaVersion !== OPERATIONAL_ROUTING_SCHEMA_VERSION) {
+    addIssue(issues, 'unsupported-schema-version', '$.schemaVersion', 'Operational routing policy schema version is not supported.')
+  }
+  if (policy.policyProfile !== OPERATIONAL_ROUTING_POLICY_PROFILE) {
+    addIssue(issues, 'unsupported-policy-profile', '$.policyProfile', 'Operational routing policy profile is not supported.')
+  }
+  requireNonNegativeInteger(policy.policyVersion, '$.policyVersion', issues)
+  checkTimestamp(policy.updatedAt, '$.updatedAt', issues)
+
+  const capabilityIds: string[] = []
+  if (!Array.isArray(policy.capabilities)) {
+    addIssue(issues, 'invalid-array', '$.capabilities', 'Expected an array.')
+  } else {
+    policy.capabilities.forEach((capability, index) => {
+      const id = validateCapability(capability, index, issues)
+      if (id !== undefined) capabilityIds.push(id)
+    })
+  }
+  checkDuplicates(capabilityIds, 'duplicate-capability-id', '$.capabilities', issues)
+  const capabilityIdSet = new Set(capabilityIds)
+  BUILT_IN_ROUTING_CAPABILITIES.forEach((builtIn) => {
+    if (!capabilityIdSet.has(builtIn.id)) {
+      addIssue(issues, 'missing-built-in-capability', '$.capabilities', `Required built-in capability ${builtIn.id} is missing.`)
+    }
+  })
+
+  const profiles: Array<{ id?: string; enabled: boolean; capabilityIds: string[]; fallbackOrder?: number }> = []
+  if (!Array.isArray(policy.profiles)) {
+    addIssue(issues, 'invalid-array', '$.profiles', 'Expected an array.')
+  } else {
+    policy.profiles.forEach((profile, index) => profiles.push(validateExecutionProfile(profile, index, issues)))
+  }
+  const profileIds = profiles.flatMap((profile) => profile.id === undefined ? [] : [profile.id])
+  checkDuplicates(profileIds, 'duplicate-profile-id', '$.profiles', issues)
+  const profileIdSet = new Set(profileIds)
+
+  profiles.forEach((profile, profileIndex) => {
+    profile.capabilityIds.forEach((capabilityId, capabilityIndex) => {
+      if (!capabilityIdSet.has(capabilityId)) {
+        addIssue(
+          issues,
+          'dangling-capability-reference',
+          `$.profiles[${profileIndex}].capabilityIds[${capabilityIndex}]`,
+          'Profile references an unknown capability.',
+        )
+      }
+    })
+  })
+
+  const defaultProfileOrder = requireStringArray(policy.defaultProfileOrder, '$.defaultProfileOrder', issues)
+  checkDuplicates(defaultProfileOrder, 'duplicate-order-entry', '$.defaultProfileOrder', issues)
+  defaultProfileOrder.forEach((profileId, index) => {
+    if (!profileIdSet.has(profileId)) {
+      addIssue(issues, 'dangling-profile-reference', `$.defaultProfileOrder[${index}]`, 'Order references an unknown profile.')
+    }
+  })
+  const defaultOrderSet = new Set(defaultProfileOrder)
+  profiles.forEach((profile, index) => {
+    if (profile.enabled && profile.id !== undefined && !defaultOrderSet.has(profile.id)) {
+      addIssue(issues, 'enabled-profile-not-ordered', `$.profiles[${index}].id`, 'Enabled profile must appear in the default profile order.')
+    }
+    if (profile.id !== undefined) {
+      const orderIndex = defaultProfileOrder.indexOf(profile.id)
+      if (orderIndex >= 0 && profile.fallbackOrder !== undefined && profile.fallbackOrder !== orderIndex) {
+        addIssue(issues, 'fallback-order-mismatch', `$.profiles[${index}].fallbackOrder`, 'Profile fallback order must match the default profile order.')
+      }
+    }
+  })
+
+  const overrideCapabilityIds: string[] = []
+  if (!Array.isArray(policy.capabilityOverrides)) {
+    addIssue(issues, 'invalid-array', '$.capabilityOverrides', 'Expected an array.')
+  } else {
+    policy.capabilityOverrides.forEach((value, index) => {
+      const path = `$.capabilityOverrides[${index}]`
+      const override = requireRecord(value, path, issues)
+      if (!override) return
+      checkUnknownKeys(override, OPERATIONAL_OVERRIDE_KEYS, path, issues)
+      const capabilityId = requireStableId(override.capabilityId, `${path}.capabilityId`, issues)
+      if (capabilityId !== undefined) {
+        overrideCapabilityIds.push(capabilityId)
+        if (!capabilityIdSet.has(capabilityId)) {
+          addIssue(issues, 'dangling-capability-reference', `${path}.capabilityId`, 'Override references an unknown capability.')
+        }
+      }
+      const profileOrder = requireStringArray(override.profileOrder, `${path}.profileOrder`, issues)
+      checkDuplicates(profileOrder, 'duplicate-order-entry', `${path}.profileOrder`, issues)
+      profileOrder.forEach((profileId, profileIndex) => {
+        if (!profileIdSet.has(profileId)) {
+          addIssue(issues, 'dangling-profile-reference', `${path}.profileOrder[${profileIndex}]`, 'Override references an unknown profile.')
+        }
+      })
+    })
+  }
+  checkDuplicates(overrideCapabilityIds, 'duplicate-capability-override', '$.capabilityOverrides', issues)
+
+  if (issues.length > 0) return { valid: false, issues }
+  return { valid: true, issues, policy: input as OperationalRoutingPolicy }
+}
+
+export function migrateModelRoutingPolicyV1ToV2(
+  source: ModelRoutingPolicy,
+  policyVersion = 1,
+): OperationalPolicyMigrationPreview {
+  const validation = validateModelRoutingPolicy(source)
+  if (!validation.valid) throw new Error('Cannot migrate an invalid Spec 004 routing policy.')
+  if (!Number.isInteger(policyVersion) || policyVersion < 0) {
+    throw new Error('Operational routing policy version must be a non-negative integer.')
+  }
+
+  const orderIndex = new Map(source.defaultRouteOrder.map((routeId, index) => [routeId, index]))
+  const profiles: RoutingExecutionProfile[] = source.routes.map((route, routeIndex) => ({
+    id: route.id,
+    displayName: route.displayName,
+    destinationAdapterId: 'manual',
+    destinationInstanceId: `legacy:${route.id}`,
+    providerId: route.provider,
+    modelId: route.model,
+    effort: null,
+    capabilityIds: [...route.capabilityIds],
+    enabled: route.enabled,
+    behavior: 'recommend',
+    fallbackOrder: orderIndex.get(route.id) ?? source.defaultRouteOrder.length + routeIndex,
+    readiness: {
+      state: 'unchecked',
+      checkedAt: null,
+      expiresAt: null,
+      adapterVersion: null,
+      installedVersion: null,
+      reasonCode: null,
+    },
+  }))
+
+  return {
+    sourcePolicyRevision: getModelRoutingPolicyRevision(source),
+    policy: {
+      schemaVersion: OPERATIONAL_ROUTING_SCHEMA_VERSION,
+      policyProfile: OPERATIONAL_ROUTING_POLICY_PROFILE,
+      policyVersion,
+      updatedAt: source.updatedAt,
+      capabilities: source.capabilities.map((capability) => ({ ...capability })),
+      profiles,
+      defaultProfileOrder: [...source.defaultRouteOrder],
+      capabilityOverrides: source.capabilityOverrides.map((override) => ({
+        capabilityId: override.capabilityId,
+        profileOrder: [...override.routeOrder],
+      })),
+    },
+  }
+}
+
+export function buildEffectiveProfileOrder(
+  policy: OperationalRoutingPolicy,
+  requiredCapabilityIds: string[],
+): { profileOrder: string[]; appliedOverrideCapabilityIds: string[] } {
+  const required = new Set(requiredCapabilityIds)
+  const appliedOverrides = policy.capabilityOverrides.filter((override) => required.has(override.capabilityId))
+  const profileOrder: string[] = []
+  for (const profileId of [
+    ...appliedOverrides.flatMap((override) => override.profileOrder),
+    ...policy.defaultProfileOrder,
+  ]) {
+    if (!profileOrder.includes(profileId)) profileOrder.push(profileId)
+  }
+  return {
+    profileOrder,
+    appliedOverrideCapabilityIds: appliedOverrides.map((override) => override.capabilityId),
+  }
+}
+
+function hasEveryCapability(profile: RoutingExecutionProfile, capabilityIds: string[]): boolean {
+  return capabilityIds.every((capabilityId) => profile.capabilityIds.includes(capabilityId))
+}
+
+function hasAnyCapability(profile: RoutingExecutionProfile, capabilityIds: string[]): boolean {
+  return capabilityIds.some((capabilityId) => profile.capabilityIds.includes(capabilityId))
+}
+
+function isOperationalProfileReady(profile: RoutingExecutionProfile, now: number): boolean {
+  if (profile.readiness.state !== 'ready' || profile.readiness.expiresAt === null) return false
+  const expiresAt = new Date(profile.readiness.expiresAt).getTime()
+  return Number.isFinite(expiresAt) && expiresAt > now
+}
+
+export function preflightOperationalRoute(input: RoutingPreflightRequest): RoutingPreflightResult {
+  const validation = validateOperationalRoutingPolicy(input.policy)
+  const requiredCapabilityIds = uniqueStrings(input.requiredCapabilityIds)
+  const policyRevision = validation.valid
+    ? getOperationalRoutingPolicyRevision(input.policy)
+    : `${String(input.policy?.policyVersion ?? 'unknown')}:${String(input.policy?.updatedAt ?? 'unknown')}`
+  const base = {
+    policyVersion: input.policy?.policyVersion ?? 0,
+    policyRevision,
+    requiredCapabilityIds,
+    classificationSource: input.classificationSource,
+    effectiveProfileOrder: [] as string[],
+    appliedOverrideCapabilityIds: [] as string[],
+    eligibleProfileIds: [] as string[],
+    exactProfileIds: [] as string[],
+    partialProfileIds: [] as string[],
+  }
+
+  if (!validation.valid) {
+    return { ...base, status: 'invalid-policy', reasonCodes: ['INVALID_POLICY'], validationIssues: validation.issues }
+  }
+  if (input.override.mode === 'self') {
+    return { ...base, status: 'self-handled', reasonCodes: ['EXPLICIT_SELF_OVERRIDE'] }
+  }
+  if (input.classificationAmbiguous) {
+    return { ...base, status: 'decision-required', reasonCodes: ['AMBIGUOUS_CLASSIFICATION'] }
+  }
+  if (requiredCapabilityIds.length === 0) {
+    return { ...base, status: 'decision-required', reasonCodes: ['CAPABILITIES_REQUIRED'] }
+  }
+
+  const { profileOrder, appliedOverrideCapabilityIds } = buildEffectiveProfileOrder(input.policy, requiredCapabilityIds)
+  const profileById = new Map(input.policy.profiles.map((profile) => [profile.id, profile]))
+  const orderedProfiles = profileOrder.flatMap((profileId) => {
+    const profile = profileById.get(profileId)
+    return profile ? [profile] : []
+  })
+  const exactProfiles = orderedProfiles.filter((profile) => hasEveryCapability(profile, requiredCapabilityIds))
+  const partialProfiles = orderedProfiles.filter(
+    (profile) => !hasEveryCapability(profile, requiredCapabilityIds) && hasAnyCapability(profile, requiredCapabilityIds),
+  )
+  const excluded = input.override.mode === 'exclude' ? new Set(input.override.profileIds) : new Set<string>()
+  const now = new Date(input.now ?? new Date().toISOString()).getTime()
+  const eligibleProfiles = exactProfiles.filter(
+    (profile) => profile.enabled && !excluded.has(profile.id) && isOperationalProfileReady(profile, now),
+  )
+  const populatedBase = {
+    ...base,
+    effectiveProfileOrder: profileOrder,
+    appliedOverrideCapabilityIds,
+    eligibleProfileIds: eligibleProfiles.map((profile) => profile.id),
+    exactProfileIds: exactProfiles.map((profile) => profile.id),
+    partialProfileIds: partialProfiles.map((profile) => profile.id),
+  }
+
+  if (input.override.mode === 'include') {
+    const includedProfileId = input.override.profileId
+    const selected = exactProfiles.find((profile) => profile.id === includedProfileId)
+    if (!selected || !selected.enabled || !isOperationalProfileReady(selected, now)) {
+      return { ...populatedBase, status: 'unavailable', reasonCodes: ['EXPLICIT_PROFILE_UNAVAILABLE'] }
+    }
+    return {
+      ...populatedBase,
+      status: 'auto-dispatch-eligible',
+      selectedProfileId: selected.id,
+      reasonCodes: ['EXPLICIT_PROFILE_OVERRIDE'],
+    }
+  }
+
+  const selected = eligibleProfiles[0]
+  if (selected) {
+    return {
+      ...populatedBase,
+      status: selected.behavior === 'auto-exact' ? 'auto-dispatch-eligible' : 'recommend',
+      selectedProfileId: selected.id,
+      reasonCodes: [selected.behavior === 'auto-exact' ? 'EXACT_AUTO_PROFILE' : 'EXACT_RECOMMENDATION_PROFILE'],
+    }
+  }
+  if (exactProfiles.length > 0) {
+    return { ...populatedBase, status: 'unavailable', reasonCodes: ['EXACT_PROFILE_NOT_READY'] }
+  }
+  if (partialProfiles.length > 0) {
+    return { ...populatedBase, status: 'decision-required', reasonCodes: ['PARTIAL_MATCH_REQUIRES_DECISION'] }
+  }
+  return { ...populatedBase, status: 'unavailable', reasonCodes: ['NO_MATCHING_PROFILE'] }
 }
 
 function ticketInferenceText(ticket: Ticket): string {
