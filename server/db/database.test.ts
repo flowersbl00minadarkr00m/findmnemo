@@ -32,7 +32,7 @@ function ticket(id: string) {
 }
 
 describe('FindMnemo database', () => {
-  it('creates the approved app-data path and enables schema safeguards', async () => {
+  it.runIf(process.platform === 'win32')('creates the approved app-data path and enables schema safeguards', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'findmnemo-appdata-'))
     cleanup.push(directory)
     const expected = join(directory, 'FindMnemo', 'findmnemo.db')

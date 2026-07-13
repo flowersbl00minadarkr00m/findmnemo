@@ -208,7 +208,7 @@ describe('loopback companion shell', () => {
     const statusBody = await status.json() as { data: { capabilities: Record<string, unknown> } }
     expect(status.status).toBe(200)
     expect(statusBody.data.capabilities).toMatchObject({ schemaVersion: 1, platform: process.platform, architecture: process.arch, node: { requiredMajor: 24 }, gmail: { credentialStore: { backend: process.platform === 'win32' ? 'windows-dpapi' : process.platform === 'darwin' ? 'macos-keychain' : 'linux-secret-service' } } })
-    expect(JSON.stringify(statusBody.data.capabilities)).not.toMatch(/hostname|username|homeDir|account|token|secret|environment/i)
+    expect(JSON.stringify(statusBody.data.capabilities)).not.toMatch(/"(?:hostname|username|homeDir|account|token|secret|environment)"\s*:/i)
     const diagnostics = await fetch(`${base}/diagnostics`, { headers: authenticatedHeaders })
     const diagnosticsBody = await diagnostics.json() as { data: Record<string, unknown> }
     expect(diagnostics.status).toBe(200)

@@ -7,7 +7,7 @@ import { WindowsDpapiSecretStore } from './windows-dpapi-store.js'
 const cleanup: string[] = []
 afterEach(async () => Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true }))))
 
-describe('Windows DPAPI secret store', () => {
+describe.skipIf(process.platform !== 'win32')('Windows DPAPI secret store', () => {
   it('round-trips through CurrentUser protection without writing plaintext', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'findmnemo-secrets-'))
     cleanup.push(directory)

@@ -1,6 +1,7 @@
 import { createServer, type Server } from 'node:http'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { runCompanionDoctor } from './doctor.js'
 
@@ -9,7 +10,7 @@ afterEach(async () => { for (const close of cleanup.splice(0)) await close() })
 
 describe('companion doctor', () => {
   it('distinguishes stopped from an occupied identity-mismatch port and emits no local paths', async () => {
-    const directory = await mkdtemp(`${tmpdir()}\\findmnemo-doctor-`)
+    const directory = await mkdtemp(join(tmpdir(), 'findmnemo-doctor-'))
     cleanup.push(() => rm(directory, { recursive: true, force: true }))
     const credentialCapability = { backend: 'windows-dpapi' as const, state: 'available' as const, code: 'CREDENTIAL_STORE_AVAILABLE', guidance: 'Available locally.' }
     const stopped = await runCompanionDoctor({ port: 0, localAppData: directory, credentialCapability })

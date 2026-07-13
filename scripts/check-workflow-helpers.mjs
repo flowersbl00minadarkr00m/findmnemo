@@ -40,9 +40,9 @@ import { buildReceiptCommandOutput } from './log-ai-receipt.mjs'
 async function loadStorageSanitizer() {
   let source = await fs.readFile(new URL('../src/lib/storage.ts', import.meta.url), 'utf8')
   source = source
-    .replace(/import type \{[\s\S]*?\} from '\.\.\/types'\n/, '')
-    .replace(/import \{ DEMO_TICKETS, DEMO_ACTIVITIES, DEMO_EMAILS \} from '\.\/demo-data'\n/, 'const DEMO_TICKETS = []\nconst DEMO_ACTIVITIES = []\nconst DEMO_EMAILS = []\n')
-    .replace(/import \{ recordTelemetry \} from '\.\/telemetry'\n/, 'function recordTelemetry() {}\n')
+    .replace(/import type \{[\s\S]*?\} from '\.\.\/types'\r?\n/, '')
+    .replace(/import \{ DEMO_TICKETS, DEMO_ACTIVITIES, DEMO_EMAILS \} from '\.\/demo-data'\r?\n/, 'const DEMO_TICKETS = []\nconst DEMO_ACTIVITIES = []\nconst DEMO_EMAILS = []\n')
+    .replace(/import \{ recordTelemetry \} from '\.\/telemetry'\r?\n/, 'function recordTelemetry() {}\n')
 
   const { outputText } = ts.transpileModule(source, {
     compilerOptions: {
