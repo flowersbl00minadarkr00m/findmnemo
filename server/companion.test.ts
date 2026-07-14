@@ -11,6 +11,8 @@ import { COMPANION_PROTOCOL_VERSION, type OperationalRoutingPolicy } from '../sh
 import { OperationalRepository } from './db/operational-repository.js'
 import { MemorySecretStore } from './auth/secret-store.js'
 import { RoutingIntegrationAuthService } from './routing/integration-auth.js'
+import { TokscaleCommandRunner } from './usage/tokscale-command-runner.js'
+import type { BoundedProcessRunner } from './process/bounded-process-runner.js'
 
 describe('loopback companion shell', () => {
   let distPath: string
@@ -141,6 +143,37 @@ describe('loopback companion shell', () => {
     expect((await missingRetry.json() as { error: { code: string } }).error.code).toBe('RETRY_NOT_ALLOWED')
   })
 
+  it('exposes paired Tokscale capability without accepting browser command input', async () => {
+    const processRunner: BoundedProcessRunner = {
+      run: async (request) => {
+        expect(request.args).toEqual(['--version'])
+        expect(request.executable).toMatch(/tokscale(?:\.exe)?$/i)
+        return { status: 'completed', exitCode: 0, stdout: 'tokscale 4.5.2', stderr: 'discarded diagnostic' }
+      },
+    }
+    const companion = await start(0, {
+      routingSecretStore: new MemorySecretStore(),
+      tokscaleCommandRunner: new TokscaleCommandRunner(processRunner, () => new Date('2026-07-13T12:00:00.000Z')),
+    })
+    const base = `http://${COMPANION_HOST}:${companion.port}/api/v1`
+    const unauthorized = await fetch(`${base}/usage/capability`, { headers: apiHeaders(companion) })
+    expect(unauthorized.status).toBe(401)
+    await unauthorized.json()
+    const browserNonce = 'usage_browser_nonce_123456789'
+    const pair = await fetch(`${base}/pairing/session`, {
+      method: 'POST', headers: apiHeaders(companion, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ code: companion.pairingCode, browserNonce }),
+    })
+    const token = ((await pair.json()) as { data: { token: string } }).data.token
+    const response = await fetch(`${base}/usage/capability?command=login&args=unsafe`, { headers: apiHeaders(companion, {
+      authorization: `Bearer ${token}`, 'x-findmnemo-browser-nonce': browserNonce,
+    }) })
+    const body = await response.json() as { data: Record<string, unknown> }
+    expect(response.status).toBe(200)
+    expect(body.data).toMatchObject({ schema: 'findmnemo.usage-capability.v1', state: 'installed-supported', installedVersion: '4.5.2' })
+    expect(JSON.stringify(body)).not.toMatch(/discarded diagnostic|command|args|login|unsafe/i)
+  })
+
   it('issues a fresh single-use local bootstrap for every fallback HTML load', async () => {
     const companion = await start()
     const base = `http://${COMPANION_HOST}:${companion.port}`
@@ -188,7 +221,7 @@ describe('loopback companion shell', () => {
     const response = await fetch(endpoint, {
       method: 'OPTIONS',
       headers: {
-        origin: 'https://mnemosync.vercel.app',
+        origin: 'https://findmnemo.vercel.app',
         'access-control-request-method': 'PATCH',
         'access-control-request-headers': 'authorization,content-type,idempotency-key,x-findmnemo-protocol-version,x-findmnemo-browser-nonce',
       },
@@ -211,7 +244,7 @@ describe('loopback companion shell', () => {
     expect(rejected.status).toBe(403)
   })
 
-  it('allows the exact production origin to pair but rejects a near-match origin', async () => {
+  it('allows both exact production origins to pair but rejects a near-match origin', async () => {
     const companion = await start()
     const endpoint = `http://${COMPANION_HOST}:${companion.port}/api/v1/pairing/session`
     const browserNonce = 'hosted_browser_nonce_123456'
@@ -224,10 +257,24 @@ describe('loopback companion shell', () => {
       },
       body: JSON.stringify({ code: companion.pairingCode, browserNonce }),
     })
-    expect((await request('https://mnemosync.vercel.app.attacker.example')).status).toBe(403)
-    const accepted = await request('https://mnemosync.vercel.app')
+    expect((await request('https://findmnemo.vercel.app.attacker.example')).status).toBe(403)
+    const accepted = await request('https://findmnemo.vercel.app')
     expect(accepted.status).toBe(200)
-    expect(accepted.headers.get('access-control-allow-origin')).toBe('https://mnemosync.vercel.app')
+    expect(accepted.headers.get('access-control-allow-origin')).toBe('https://findmnemo.vercel.app')
+
+    const legacyCompanion = await start()
+    const legacyEndpoint = `http://${COMPANION_HOST}:${legacyCompanion.port}/api/v1/pairing/session`
+    const legacy = await fetch(legacyEndpoint, {
+      method: 'POST',
+      headers: {
+        origin: 'https://mnemosync.vercel.app',
+        'content-type': 'application/json',
+        'x-findmnemo-protocol-version': COMPANION_PROTOCOL_VERSION,
+      },
+      body: JSON.stringify({ code: legacyCompanion.pairingCode, browserNonce }),
+    })
+    expect(legacy.status).toBe(200)
+    expect(legacy.headers.get('access-control-allow-origin')).toBe('https://mnemosync.vercel.app')
   })
 
   it('exchanges a single-use code for a nonce-bound session, rotates it, and revokes it', async () => {
@@ -453,12 +500,12 @@ describe('loopback companion shell', () => {
     const hostedNonce = 'hosted_shared_nonce_1234567'
     const hostedPair = await fetch(`${base}/pairing/session`, {
       method: 'POST',
-      headers: { origin: 'https://mnemosync.vercel.app', 'content-type': 'application/json', 'x-findmnemo-protocol-version': COMPANION_PROTOCOL_VERSION },
+      headers: { origin: 'https://findmnemo.vercel.app', 'content-type': 'application/json', 'x-findmnemo-protocol-version': COMPANION_PROTOCOL_VERSION },
       body: JSON.stringify({ code: companion.pairingCode, browserNonce: hostedNonce }),
     })
     const hostedBody = await hostedPair.json() as { data: { token: string } }
     const hostedHeaders = {
-      origin: 'https://mnemosync.vercel.app', authorization: `Bearer ${hostedBody.data.token}`,
+      origin: 'https://findmnemo.vercel.app', authorization: `Bearer ${hostedBody.data.token}`,
       'x-findmnemo-browser-nonce': hostedNonce, 'x-findmnemo-protocol-version': COMPANION_PROTOCOL_VERSION,
     }
     const ticket = {

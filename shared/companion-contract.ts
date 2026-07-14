@@ -478,6 +478,348 @@ export interface RoutingDispatchReceiptDto {
   resultHash: string | null
 }
 
+export const USAGE_VALUE_STATES = ['reported', 'calculated', 'estimated', 'unknown'] as const
+export const USAGE_VALUE_REASONS = [
+  'upstream-reported',
+  'derived-from-reported-components',
+  'field-absent',
+  'semantics-unverified',
+  'source-unavailable',
+  'not-applicable',
+] as const
+export const USAGE_FRESHNESS_STATES = ['current', 'stale', 'never-refreshed', 'retained-after-failure'] as const
+export const USAGE_MAPPING_STATES = ['unmapped', 'automatic', 'manual', 'target-missing'] as const
+export const USAGE_DUPLICATE_STATES = ['unique', 'identical-collapsed', 'conflict-quarantined', 'overlap-unknown'] as const
+
+export type UsageValueState = (typeof USAGE_VALUE_STATES)[number]
+export type UsageValueReason = (typeof USAGE_VALUE_REASONS)[number]
+export type UsageFreshnessState = (typeof USAGE_FRESHNESS_STATES)[number]
+export type UsageMappingState = (typeof USAGE_MAPPING_STATES)[number]
+export type UsageDuplicateState = (typeof USAGE_DUPLICATE_STATES)[number]
+
+export interface UsageMetricDto {
+  value: number | null
+  state: UsageValueState
+  reason: UsageValueReason
+}
+
+export interface UsageMetricSetDto {
+  inputTokens: UsageMetricDto
+  outputTokens: UsageMetricDto
+  cacheReadTokens: UsageMetricDto
+  cacheWriteTokens: UsageMetricDto
+  reasoningTokens: UsageMetricDto
+  totalTokens: UsageMetricDto
+  cost: UsageMetricDto
+  currency: string | null
+}
+
+export interface UsageRouteMappingDto {
+  state: UsageMappingState
+  profileId: string | null
+  source: 'none' | 'exact' | 'manual'
+  mappedAt: string | null
+}
+
+export interface UsageProvenanceDto {
+  sourceCommandId: 'canonical-graph' | 'session-attribution' | 'workspace-attribution'
+  tokscaleVersion: string
+  adapterId: string
+  refreshRunId: string
+  refreshedAt: string
+  transformations: string[]
+  duplicateState: UsageDuplicateState
+}
+
+export interface UsageFreshnessDto {
+  state: UsageFreshnessState
+  lastSuccessfulRefreshAt: string | null
+  upstreamGeneratedAt: string | null
+}
+
+export interface NormalizedUsageRecordDto extends UsageMetricSetDto {
+  schema: 'findmnemo.usage.v1'
+  id: string
+  role: 'canonical-daily'
+  periodStart: string
+  periodEnd: string
+  clientId: string
+  providerId: string | null
+  modelId: string
+  routeMapping: UsageRouteMappingDto
+  provenance: UsageProvenanceDto
+  freshness: UsageFreshnessDto
+}
+
+export interface UsageAttributionRecordDto {
+  schema: 'findmnemo.usage-attribution.v1'
+  id: string
+  role: 'session-attribution' | 'workspace-attribution'
+  additive: false
+  clientId: string | null
+  providerId: string | null
+  modelId: string
+  opaqueSubjectId: string
+  localLabel: string | null
+  metrics: UsageMetricSetDto
+  provenance: UsageProvenanceDto
+  joinState: 'linked' | 'unlinked' | 'ambiguous'
+}
+
+export interface UsageSourceCoverageDto {
+  clientId: string
+  state: 'available' | 'unavailable' | 'failed'
+  messageCount: number | null
+  diagnosticCodes: string[]
+}
+
+export interface UsageCoverageDto {
+  schema: 'findmnemo.usage-coverage.v1'
+  tokscaleVersion: string
+  adapterId: string
+  refreshedAt: string
+  sources: UsageSourceCoverageDto[]
+  complete: boolean
+  warnings: string[]
+}
+
+export const USAGE_CAPABILITY_STATES = [
+  'not-installed',
+  'installed-supported',
+  'installed-unsupported-version',
+  'installed-contract-unverified',
+  'detection-failed',
+] as const
+
+export type UsageCapabilityState = (typeof USAGE_CAPABILITY_STATES)[number]
+
+export type UsageCollectorSource = 'embedded' | 'external-recovery' | 'unavailable'
+
+export interface UsageCapabilityDto {
+  schema: 'findmnemo.usage-capability.v1'
+  state: UsageCapabilityState
+  executableLabel: 'tokscale'
+  collectorSource: UsageCollectorSource
+  installedVersion: string | null
+  supportedRange: string
+  adapterId: string | null
+  checkedAt: string
+  lastSuccessfulRefreshAt: string | null
+  sources: UsageSourceCoverageDto[]
+  reasonCode: string | null
+  guidance: {
+    summary: string
+    installationUrl: string
+    automaticInstall: false
+  }
+}
+
+export const USAGE_REFRESH_STATES = ['requested', 'detecting', 'collecting', 'normalizing', 'committing', 'complete', 'partial', 'failed', 'cancelled'] as const
+export type UsageRefreshState = (typeof USAGE_REFRESH_STATES)[number]
+
+export interface UsageRefreshCommandDto {
+  recipeId: 'version' | 'clients' | 'canonical-graph' | 'session-attribution' | 'workspace-attribution'
+  state: 'pending' | 'complete' | 'failed' | 'skipped'
+  durationMs: number | null
+  outputBytes?: number | null
+  recordCount: number | null
+  errorCode: string | null
+}
+
+export interface UsageRefreshRunDto {
+  schema: 'findmnemo.usage-refresh.v1'
+  id: string
+  state: UsageRefreshState
+  stage: 'requested' | 'capability-check' | 'source-coverage' | 'canonical-usage' | 'attribution' | 'normalization' | 'commit' | 'finished'
+  requestedAt: string
+  finishedAt: string | null
+  coverageStart: string
+  coverageEnd: string
+  commands: UsageRefreshCommandDto[]
+  canonicalCount: number
+  attributionCount: number
+  warningCodes: string[]
+  errorCode: string | null
+  lastSuccessfulRefreshAt: string | null
+  retainedPreviousSuccess: boolean
+}
+
+export interface UsageQueryDto {
+  start: string | null
+  end: string | null
+  clientId: string | null
+  providerId: string | null
+  modelId: string | null
+  profileId: string | null
+  mappingState: UsageMappingState | null
+}
+
+export interface UsageAggregateMetricDto {
+  value: number | null
+  knownRecordCount: number
+  unknownRecordCount: number
+  state: 'complete' | 'partial' | 'unknown'
+}
+
+export interface UsageBreakdownDto {
+  key: string
+  label: string
+  recordCount: number
+  totalTokens: UsageAggregateMetricDto
+  cost: UsageAggregateMetricDto
+}
+
+export interface UsageTrendPointDto extends UsageBreakdownDto {
+  periodStart: string
+}
+
+export interface UsageSummaryDto {
+  schema: 'findmnemo.usage-summary.v1'
+  filters: UsageQueryDto
+  recordCount: number
+  totalTokens: UsageAggregateMetricDto
+  inputTokens: UsageAggregateMetricDto
+  outputTokens: UsageAggregateMetricDto
+  cacheReadTokens: UsageAggregateMetricDto
+  cacheWriteTokens: UsageAggregateMetricDto
+  reasoningTokens: UsageAggregateMetricDto
+  cost: UsageAggregateMetricDto
+  currencies: string[]
+  trends: { day: UsageTrendPointDto[]; week: UsageTrendPointDto[]; month: UsageTrendPointDto[] }
+  breakdowns: { clients: UsageBreakdownDto[]; providers: UsageBreakdownDto[]; models: UsageBreakdownDto[] }
+  coverage: UsageCoverageDto | null
+  freshness: UsageFreshnessDto
+  duplicateConflictCount: number
+  warnings: string[]
+}
+
+export interface UsageRecordsPageDto {
+  schema: 'findmnemo.usage-records.v1'
+  records: NormalizedUsageRecordDto[]
+  nextCursor: string | null
+  totalCount: number
+}
+
+export interface UsageManualMappingDto {
+  identityKey: string
+  clientId: string
+  providerId: string | null
+  modelId: string
+  profileId: string
+  state: 'manual' | 'target-missing'
+  createdAt: string
+  updatedAt: string
+}
+
+export interface UsageRouteObservationDto {
+  profileId: string
+  observation: 'most-used-route' | 'no-observed-usage' | 'high-estimated-cost-concentration' | 'configured-but-unmapped' | 'usage-evidence-incomplete'
+  recordCount: number
+  totalTokens: number | null
+  estimatedCost: number | null
+  coverageComplete: boolean
+  periodStart: string | null
+  periodEnd: string | null
+}
+
+export const DATA_CATEGORY_IDS = [
+  'tickets-work',
+  'decisions-receipts',
+  'routing-policy',
+  'model-usage',
+  'email-metadata',
+] as const
+
+export type DataCategoryId = (typeof DATA_CATEGORY_IDS)[number]
+export type DataCategoryState = 'available' | 'empty' | 'partial' | 'stale' | 'unavailable' | 'unsupported'
+export type DataImportClassification = 'add' | 'duplicate' | 'conflict' | 'excluded' | 'unsupported' | 'failed'
+
+export interface DataCategoryPreviewDto {
+  id: DataCategoryId
+  label: string
+  description: string
+  state: DataCategoryState
+  recordCount: number | null
+  freshnessAt: string | null
+  coverage: string
+  selectedByDefault: boolean
+  exportable: boolean
+  importable: boolean
+  artifactProfile: string
+  privacyNote: string
+}
+
+export interface DataExportPreviewDto {
+  schema: 'findmnemo.data-export-preview.v1'
+  workspace: 'operational'
+  generatedAt: string
+  categories: DataCategoryPreviewDto[]
+  exclusions: string[]
+}
+
+export interface DataBundleManifestV1 {
+  profile: 'findmnemo.data-bundle-manifest.v1'
+  product: { name: 'FindMnemo'; version: string }
+  workspace: 'operational'
+  generatedAt: string
+  categories: Array<Pick<DataCategoryPreviewDto, 'id' | 'state' | 'recordCount' | 'freshnessAt' | 'coverage' | 'artifactProfile'>>
+  exclusions: string[]
+  compatibility: { productId: 'findmnemo'; legacyProductId: 'mnemosync'; legacyUriScheme: 'mnemosync://' }
+  evidenceBoundary: string
+}
+
+export interface DataBundleArtifactV1 {
+  category: DataCategoryId
+  profile: string
+  mediaType: 'application/json'
+  schemaVersion: string
+  data: unknown
+}
+
+export interface DataBundleV1 {
+  profile: 'findmnemo.data-bundle.v1'
+  manifest: DataBundleManifestV1
+  artifacts: DataBundleArtifactV1[]
+}
+
+export interface DataImportCategoryPreviewDto {
+  id: DataCategoryId
+  importable: boolean
+  counts: Record<DataImportClassification, number>
+  conflictPolicy: 'preserve-current' | 'not-applicable'
+  note: string
+}
+
+export interface DataImportPreviewDto {
+  schema: 'findmnemo.data-import-preview.v1'
+  planId: string
+  expiresAt: string
+  detectedProfile: string
+  categories: DataImportCategoryPreviewDto[]
+  safeToCommit: boolean
+  errors: string[]
+}
+
+export interface DataImportCommitRequest {
+  planId: string
+  categoryIds: DataCategoryId[]
+  idempotencyKey: string
+}
+
+export interface DataPortabilityReceiptDto {
+  schema: 'findmnemo.data-portability-receipt.v1'
+  operation: 'export' | 'import'
+  outcome: 'complete' | 'partial' | 'failed'
+  completedAt: string
+  artifactName: string | null
+  categories: Array<{ id: DataCategoryId; added: number; skipped: number; conflicts: number; excluded: number; failed: number }>
+  nextAction: string
+}
+
+export function isDataCategoryId(value: unknown): value is DataCategoryId {
+  return typeof value === 'string' && (DATA_CATEGORY_IDS as readonly string[]).includes(value)
+}
+
 function includesValue<const T extends readonly string[]>(values: T, input: unknown): input is T[number] {
   return typeof input === 'string' && (values as readonly string[]).includes(input)
 }
@@ -532,6 +874,102 @@ export function isRoutingClassificationSource(input: unknown): input is RoutingC
 
 export function isRoutingPreflightStatus(input: unknown): input is RoutingPreflightStatus {
   return includesValue(ROUTING_PREFLIGHT_STATUSES, input)
+}
+
+export function isUsageValueState(input: unknown): input is UsageValueState {
+  return includesValue(USAGE_VALUE_STATES, input)
+}
+
+export function isUsageValueReason(input: unknown): input is UsageValueReason {
+  return includesValue(USAGE_VALUE_REASONS, input)
+}
+
+function isPlainRecord(input: unknown): input is Record<string, unknown> {
+  return typeof input === 'object' && input !== null && !Array.isArray(input)
+}
+
+export function isUsageMetricDto(input: unknown): input is UsageMetricDto {
+  if (!isPlainRecord(input) || !isUsageValueState(input.state) || !isUsageValueReason(input.reason)) return false
+  if (input.state === 'unknown') return input.value === null
+  return typeof input.value === 'number' && Number.isFinite(input.value) && input.value >= 0
+}
+
+const USAGE_BOUNDARY_PROHIBITED_KEYS = new Set([
+  'account',
+  'accountemail',
+  'accountid',
+  'cookie',
+  'cookies',
+  'credential',
+  'credentials',
+  'homedir',
+  'path',
+  'prompt',
+  'raw',
+  'rawlog',
+  'response',
+  'sessionid',
+  'stderr',
+  'stdout',
+  'transcript',
+  'workspacekey',
+  'workspacelabel',
+])
+
+function isPrivateBoundaryString(value: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(value)
+    || /^\/(?:Users|home|var|tmp)\//.test(value)
+    || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
+}
+
+export function assertUsageBoundarySafe(input: unknown): void {
+  const visit = (value: unknown): void => {
+    if (typeof value === 'string') {
+      if (isPrivateBoundaryString(value)) throw new Error('USAGE_BOUNDARY_PRIVATE_VALUE')
+      return
+    }
+    if (Array.isArray(value)) {
+      value.forEach(visit)
+      return
+    }
+    if (!isPlainRecord(value)) return
+    for (const [key, nested] of Object.entries(value)) {
+      if (USAGE_BOUNDARY_PROHIBITED_KEYS.has(key.toLowerCase())) {
+        throw new Error('USAGE_BOUNDARY_PROHIBITED_FIELD')
+      }
+      visit(nested)
+    }
+  }
+  visit(input)
+}
+
+export function isNormalizedUsageRecordDto(input: unknown): input is NormalizedUsageRecordDto {
+  if (!isPlainRecord(input)) return false
+  try {
+    assertUsageBoundarySafe(input)
+  } catch {
+    return false
+  }
+  return input.schema === 'findmnemo.usage.v1'
+    && input.role === 'canonical-daily'
+    && typeof input.id === 'string'
+    && typeof input.periodStart === 'string'
+    && typeof input.periodEnd === 'string'
+    && typeof input.clientId === 'string'
+    && (input.providerId === null || typeof input.providerId === 'string')
+    && typeof input.modelId === 'string'
+    && isUsageMetricDto(input.inputTokens)
+    && isUsageMetricDto(input.outputTokens)
+    && isUsageMetricDto(input.cacheReadTokens)
+    && isUsageMetricDto(input.cacheWriteTokens)
+    && isUsageMetricDto(input.reasoningTokens)
+    && isUsageMetricDto(input.totalTokens)
+    && isUsageMetricDto(input.cost)
+    && (input.currency === null || typeof input.currency === 'string')
+}
+
+export function assertNormalizedUsageRecordDto(input: unknown): asserts input is NormalizedUsageRecordDto {
+  if (!isNormalizedUsageRecordDto(input)) throw new Error('INVALID_NORMALIZED_USAGE_RECORD')
 }
 
 export function assertCompanionProtocolVersion(input: unknown): asserts input is CompanionProtocolVersion {

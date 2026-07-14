@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { deriveCompanionConnectionState, sessionRotationDelay } from './companion-client'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { deriveCompanionConnectionState, getUsageCapability, sessionRotationDelay } from './companion-client'
 
 const identity = { protocolVersion: '1.0.0', companionVersion: '0.1.0', instanceId: 'test', pairingRequired: true } as const
 const session = { token: 'memory-only', browserNonce: 'browser_nonce_1234567890', expiresAt: '2026-07-10T00:15:00.000Z' }
@@ -12,6 +12,7 @@ const status = {
 } as const
 
 describe('companion connection state', () => {
+  afterEach(() => vi.unstubAllGlobals())
   it('requires identity, session, and current authenticated status for connected', () => {
     expect(deriveCompanionConnectionState({ permission: 'prompt' })).toBe('permission-required')
     expect(deriveCompanionConnectionState({ identity })).toBe('pairing-required')
@@ -29,5 +30,17 @@ describe('companion connection state', () => {
     expect(sessionRotationDelay(session, Date.parse('2026-07-10T00:00:00.000Z'))).toBe(13 * 60_000)
     expect(sessionRotationDelay(session, Date.parse('2026-07-10T00:14:00.000Z'))).toBe(0)
     expect(sessionRotationDelay({ ...session, expiresAt: 'invalid' })).toBe(0)
+  })
+
+  it('reads the paired usage capability through the fixed endpoint', async () => {
+    const capability = {
+      schema: 'findmnemo.usage-capability.v1', state: 'not-installed', executableLabel: 'tokscale', collectorSource: 'unavailable', installedVersion: null,
+      supportedRange: '>=4.4.1 <4.6.0', adapterId: null, checkedAt: '2026-07-13T12:00:00.000Z', lastSuccessfulRefreshAt: null,
+      sources: [], reasonCode: 'TOKSCALE_NOT_INSTALLED', guidance: { summary: 'Install locally.', installationUrl: 'https://github.com/junhoyeo/tokscale', automaticInstall: false },
+    }
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: capability }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(getUsageCapability(session)).resolves.toEqual(capability)
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:3210/api/v1/usage/capability', expect.objectContaining({ redirect: 'error' }))
   })
 })

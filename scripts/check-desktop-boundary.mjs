@@ -1,12 +1,17 @@
 import { readFile } from 'node:fs/promises'
 
-const [main, preload, html, builder, contract] = await Promise.all([
+const [main, preload, html, builder, contract, packageDocument, notices, tokscaleResolver] = await Promise.all([
   readFile(new URL('../desktop/main.ts', import.meta.url), 'utf8'),
   readFile(new URL('../desktop/preload.cts', import.meta.url), 'utf8'),
   readFile(new URL('../desktop.html', import.meta.url), 'utf8'),
   readFile(new URL('../electron-builder.yml', import.meta.url), 'utf8'),
   readFile(new URL('../shared/lifecycle-contract.ts', import.meta.url), 'utf8'),
+  readFile(new URL('../package.json', import.meta.url), 'utf8'),
+  readFile(new URL('../THIRD_PARTY_NOTICES.md', import.meta.url), 'utf8'),
+  readFile(new URL('../server/usage/tokscale-executable.ts', import.meta.url), 'utf8'),
 ])
+
+const packageJson = JSON.parse(packageDocument)
 
 const LIFECYCLE_CHANNELS = [...contract.matchAll(/'findmnemo:lifecycle:[^']+'/g)].map((match) => match[0].slice(1, -1))
 
@@ -36,6 +41,10 @@ const checks = [
   [main.includes('assertBundledRendererSender'), 'runtime IPC sender validation must use the tested exact-URL boundary'],
   [contract.includes('prepare-uninstall') && contract.includes('launch-uninstaller'), 'uninstall renderer surface must remain a closed plan/launch contract'],
   [contract.includes('TRUSTED_TARGETS') && ['hosted-app', 'local-app', 'support-docs'].every((target) => contract.includes(`'${target}'`)), 'trusted external targets must be closed'],
+  [packageJson.dependencies?.['@tokscale/cli'] === '4.5.2', 'Tokscale collector dependency must remain exactly pinned'],
+  [builder.includes('node_modules/@tokscale/cli-win32-x64-msvc/bin/tokscale.exe') && builder.includes('to: tokscale/tokscale.exe'), 'Windows x64 package must include only its qualified Tokscale collector asset'],
+  [builder.includes('THIRD_PARTY_NOTICES.md') && notices.includes('Tokscale 4.5.2') && notices.includes('MIT License') && notices.includes('Copyright (c) 2025 Junho Yeo'), 'Tokscale MIT notice must ship with the package'],
+  [!tokscaleResolver.includes('process.env.PATH') && !/\b(?:npm|npx|pnpm|yarn|bun)\s+(?:install|add)\b/.test(tokscaleResolver), 'collector resolution must not trust ambient PATH or install packages at runtime'],
 ]
 
 for (const [condition, message] of checks) {

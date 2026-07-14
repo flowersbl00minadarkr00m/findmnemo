@@ -33,6 +33,8 @@ npm run build:source
 npm run verify:source
 ```
 
+The locked install also supplies FindMnemo's qualified Tokscale collector for the current supported OS/architecture. Model Usage does not search for or require a globally installed `tokscale` command. Ubuntu source runs currently select the qualified glibc package; musl remains outside the accepted platform claim.
+
 Preflight is non-destructive: it does not install packages, create the operational database, terminate processes, or retain its random keyring probe. `verify:source` uses an isolated temporary database and deletes it after a bounded start/restart/stop check.
 
 ## 4. Run in the foreground
@@ -63,5 +65,7 @@ Schema-affecting startup retains the existing pre-migration backup behavior. Nev
 - `CREDENTIAL_PERMISSION_REQUIRED` / `CREDENTIAL_STORE_UNAVAILABLE`: approve, configure, or unlock the OS keyring; Gmail stays disconnected meanwhile.
 - `COMPANION_ALREADY_RUNNING`: use the verified existing instance or stop it cleanly.
 - `PORT_IN_USE`: identify and stop the unknown owner yourself; FindMnemo never kills it.
+- `TOKSCALE_EMBEDDED_MISSING`: rerun the locked `npm ci` install and build; do not substitute an unqualified global command.
+- `TOKSCALE_EMBEDDED_UNSUPPORTED_PLATFORM`: the current OS/architecture has no accepted collector path. Usage remains unavailable while the rest of the companion can continue where supported.
 
 For revision rollback, stop FindMnemo, check out the prior known-good tag, reinstall from its lock, rebuild, and verify. If that runtime rejects a newer database schema, do not force it; move forward or restore a verified compatible backup.

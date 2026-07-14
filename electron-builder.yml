@@ -18,6 +18,12 @@ files:
   - dist-desktop/**/*
   - dist-desktop-renderer/**/*
   - package.json
+  - '!node_modules/@tokscale/**/*'
+extraResources:
+  - from: node_modules/@tokscale/cli-win32-x64-msvc/bin/tokscale.exe
+    to: tokscale/tokscale.exe
+  - from: THIRD_PARTY_NOTICES.md
+    to: licenses/THIRD_PARTY_NOTICES.md
 win:
   target:
     - target: nsis

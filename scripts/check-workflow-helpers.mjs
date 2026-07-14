@@ -481,7 +481,8 @@ check('Large-view bundle splitting is implemented and documented as a review sta
 
   assert(app.includes('lazy(') && app.includes('Suspense'), 'App should use React lazy/Suspense for split views')
   assert(app.includes("import('./components/Analytics')"), 'Analytics should be dynamically imported')
-  assert(app.includes("import('./components/ProjectProgressView')"), 'Projects/SDD view should be dynamically imported')
+  assert(app.includes("import('./components/DataPrivacyView')"), 'Data & Privacy should be dynamically imported')
+  assert(!app.includes('ProjectProgressView'), 'the contracted Projects/SDD leaf should not remain in the app shell')
   assert(app.includes("import('./components/EmailPanel')"), 'Email view should be dynamically imported')
   assert(!app.includes("import { Analytics } from './components/Analytics'"), 'Analytics should not be statically imported into the app shell')
   assert(architecture.includes('bundle-size warnings as a Standards-axis finding'), 'bundle warnings should be documented as a public review standard')

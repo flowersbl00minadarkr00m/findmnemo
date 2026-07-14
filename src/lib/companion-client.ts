@@ -15,6 +15,18 @@ import {
   type ReconciliationRunDto,
   type SourceDescriptor,
   type SourceId,
+  type UsageCapabilityDto,
+  type UsageRefreshRunDto,
+  type UsageQueryDto,
+  type UsageSummaryDto,
+  type UsageRecordsPageDto,
+  type UsageCoverageDto,
+  type UsageManualMappingDto,
+  type UsageRouteObservationDto,
+  type DataCategoryId,
+  type DataExportPreviewDto,
+  type DataImportPreviewDto,
+  type DataPortabilityReceiptDto,
 } from '../../shared/companion-contract'
 import type { GmailSourceStatus } from './operational-repository'
 import type { LegacyMigrationRecord, LegacyMigrationResult } from './operational-repository'
@@ -264,6 +276,139 @@ export async function getOperationalRoutingPolicy(session: CompanionSession): Pr
   const response = await request<{ policy: OperationalRoutingPolicy | null }>('/routing/policy', {}, session)
   if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'ROUTING_POLICY_NOT_FOUND')
   return response.data.policy
+}
+
+export async function getUsageCapability(session: CompanionSession): Promise<UsageCapabilityDto> {
+  const response = await request<UsageCapabilityDto>('/usage/capability', {}, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'SOURCE_CHECK_FAILED', response.error?.message)
+  return response.data
+}
+
+export async function startUsageRefresh(session: CompanionSession, input: { since: string; until: string }): Promise<UsageRefreshRunDto> {
+  const response = await request<UsageRefreshRunDto>('/usage/refreshes', { method: 'POST', body: JSON.stringify(input) }, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'SOURCE_CHECK_FAILED', response.error?.message)
+  return response.data
+}
+
+export async function getUsageRefresh(session: CompanionSession, runId: string): Promise<UsageRefreshRunDto> {
+  const response = await request<UsageRefreshRunDto>(`/usage/refreshes/${encodeURIComponent(runId)}`, {}, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'RUN_NOT_FOUND', response.error?.message)
+  return response.data
+}
+
+export async function cancelUsageRefresh(session: CompanionSession, runId: string): Promise<UsageRefreshRunDto> {
+  const response = await request<UsageRefreshRunDto>(`/usage/refreshes/${encodeURIComponent(runId)}/cancel`, { method: 'POST', body: '{}' }, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'RUN_NOT_FOUND', response.error?.message)
+  return response.data
+}
+
+function usageSearch(filters: UsageQueryDto): string {
+  const search = new URLSearchParams()
+  for (const [key, value] of Object.entries(filters)) if (value !== null) search.set(key, value)
+  return search.toString()
+}
+
+export async function getUsageSummary(session: CompanionSession, filters: UsageQueryDto): Promise<UsageSummaryDto> {
+  const response = await request<UsageSummaryDto>(`/usage/summary?${usageSearch(filters)}`, {}, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'SOURCE_UNAVAILABLE', response.error?.message)
+  return response.data
+}
+
+export async function getUsageRecords(session: CompanionSession, filters: UsageQueryDto, cursor?: string): Promise<UsageRecordsPageDto> {
+  const suffix = `${usageSearch(filters)}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`
+  const response = await request<UsageRecordsPageDto>(`/usage/records?${suffix}`, {}, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'SOURCE_UNAVAILABLE', response.error?.message)
+  return response.data
+}
+
+export async function getUsageCoverage(session: CompanionSession): Promise<{ coverage: UsageCoverageDto | null; bounds: { periodStart: string | null; periodEnd: string | null; lastSuccessfulRefreshAt: string | null; lastSuccessRunId: string | null } }> {
+  const response = await request<{ coverage: UsageCoverageDto | null; bounds: { periodStart: string | null; periodEnd: string | null; lastSuccessfulRefreshAt: string | null; lastSuccessRunId: string | null } }>('/usage/coverage', {}, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'SOURCE_UNAVAILABLE', response.error?.message)
+  return response.data
+}
+
+export async function listUsageMappings(session: CompanionSession): Promise<UsageManualMappingDto[]> {
+  const response = await request<UsageManualMappingDto[]>('/usage/mappings', {}, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'SOURCE_UNAVAILABLE', response.error?.message)
+  return response.data
+}
+
+export async function saveUsageMapping(session: CompanionSession, mapping: { identityKey: string; clientId: string; providerId: string | null; modelId: string; profileId: string }): Promise<UsageManualMappingDto> {
+  const response = await request<UsageManualMappingDto>(`/usage/mappings/${encodeURIComponent(mapping.identityKey)}`, { method: 'PUT', body: JSON.stringify(mapping) }, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'INVALID_REQUEST', response.error?.message)
+  return response.data
+}
+
+export async function removeUsageMapping(session: CompanionSession, identityKey: string): Promise<boolean> {
+  const response = await request<{ removed: boolean }>(`/usage/mappings/${encodeURIComponent(identityKey)}`, { method: 'DELETE' }, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'INVALID_REQUEST', response.error?.message)
+  return response.data.removed
+}
+
+export async function getUsageRouteObservations(session: CompanionSession, filters: UsageQueryDto): Promise<UsageRouteObservationDto[]> {
+  const response = await request<UsageRouteObservationDto[]>(`/usage/route-observations?${usageSearch(filters)}`, {}, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'SOURCE_UNAVAILABLE', response.error?.message)
+  return response.data
+}
+
+export async function downloadUsageExport(session: CompanionSession, filters: UsageQueryDto, format: 'json' | 'csv', includeAttribution = false): Promise<void> {
+  const search = usageSearch(filters)
+  const headers = new Headers({ authorization: `Bearer ${session.token}`, 'x-findmnemo-browser-nonce': session.browserNonce, 'x-findmnemo-protocol-version': COMPANION_PROTOCOL_VERSION })
+  const response = await fetch(`${COMPANION_BASE_URL}/usage/export?${search}&format=${format}&includeAttribution=${includeAttribution}`, { headers, redirect: 'error' })
+  if (!response.ok) throw new CompanionApiRequestError('SOURCE_UNAVAILABLE', 'Usage export failed.')
+  const filename = `findmnemo-usage.${format}`
+  const picker = (window as Window & { showSaveFilePicker?: (options: { suggestedName: string; types: Array<{ description: string; accept: Record<string, string[]> }> }) => Promise<{ createWritable: () => Promise<WritableStream> }> }).showSaveFilePicker
+  if (picker && response.body) {
+    const handle = await picker({ suggestedName: filename, types: [{ description: `FindMnemo ${format.toUpperCase()} usage export`, accept: { [format === 'csv' ? 'text/csv' : 'application/json']: [`.${format}`] } }] })
+    await response.body.pipeTo(await handle.createWritable())
+    return
+  }
+  const url = URL.createObjectURL(await response.blob())
+  const anchor = document.createElement('a'); anchor.href = url; anchor.download = filename; anchor.click(); URL.revokeObjectURL(url)
+}
+
+export async function getDataExportPreview(session: CompanionSession): Promise<DataExportPreviewDto> {
+  const response = await request<DataExportPreviewDto>('/data/export/preview', {}, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'SOURCE_UNAVAILABLE', response.error?.message)
+  return response.data
+}
+
+export async function downloadDataBundle(session: CompanionSession, categoryIds: DataCategoryId[]): Promise<void> {
+  const headers = new Headers({ authorization: `Bearer ${session.token}`, 'content-type': 'application/json', 'x-findmnemo-browser-nonce': session.browserNonce, 'x-findmnemo-protocol-version': COMPANION_PROTOCOL_VERSION })
+  const response = await fetch(`${COMPANION_BASE_URL}/data/export`, { method: 'POST', headers, body: JSON.stringify({ categoryIds }), redirect: 'error' })
+  if (!response.ok) throw new CompanionApiRequestError('SOURCE_UNAVAILABLE', 'Data export failed.')
+  const disposition = response.headers.get('content-disposition') ?? ''
+  const filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? `findmnemo-data-${new Date().toISOString().slice(0, 10)}.findmnemo.json`
+  const picker = (window as Window & { showSaveFilePicker?: (options: { suggestedName: string; types: Array<{ description: string; accept: Record<string, string[]> }> }) => Promise<{ createWritable: () => Promise<WritableStream> }> }).showSaveFilePicker
+  if (picker && response.body) {
+    const handle = await picker({ suggestedName: filename, types: [{ description: 'FindMnemo data bundle', accept: { 'application/json': ['.json'] } }] })
+    await response.body.pipeTo(await handle.createWritable())
+    return
+  }
+  const url = URL.createObjectURL(await response.blob())
+  const anchor = document.createElement('a'); anchor.href = url; anchor.download = filename; anchor.click(); URL.revokeObjectURL(url)
+}
+
+export async function previewDataImport(session: CompanionSession, bundle: Record<string, unknown>): Promise<DataImportPreviewDto> {
+  const response = await request<DataImportPreviewDto>('/data/import/preview', { method: 'POST', body: JSON.stringify(bundle) }, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'INVALID_REQUEST', response.error?.message)
+  return response.data
+}
+
+export async function commitDataImport(session: CompanionSession, input: { planId: string; categoryIds: DataCategoryId[]; idempotencyKey: string }): Promise<DataPortabilityReceiptDto> {
+  const response = await request<DataPortabilityReceiptDto>('/data/import/commit', { method: 'POST', body: JSON.stringify(input) }, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'INVALID_REQUEST', response.error?.message)
+  return response.data
+}
+
+export async function clearUsageHistory(session: CompanionSession): Promise<void> {
+  const response = await request<{ cleared: boolean }>('/usage/history', { method: 'DELETE', body: JSON.stringify({ confirmation: 'clear-usage-history' }) }, session)
+  if (response.error || !response.data?.cleared) throw new CompanionApiRequestError(response.error?.code ?? 'INVALID_REQUEST', response.error?.message)
+}
+
+export async function clearUsageMappings(session: CompanionSession): Promise<void> {
+  const response = await request<{ cleared: boolean }>('/usage/mappings', { method: 'DELETE', body: JSON.stringify({ confirmation: 'clear-usage-mappings' }) }, session)
+  if (response.error || !response.data?.cleared) throw new CompanionApiRequestError(response.error?.code ?? 'INVALID_REQUEST', response.error?.message)
 }
 
 export async function updateOperationalRoutingPolicy(session: CompanionSession, policy: OperationalRoutingPolicy, expectedPolicyVersion: number | null): Promise<OperationalRoutingPolicy> {

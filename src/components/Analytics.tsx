@@ -96,6 +96,8 @@ export function Analytics({ tickets }: Props) {
 
   return (
     <div className="space-y-6">
+      {tickets.length === 0 && <div className="rounded-sm border border-memory/40 bg-memory/10 p-4 text-sm text-mut" role="status"><p className="font-semibold text-ink">Work Metrics needs operational ticket history</p><p className="mt-1">Create or reconcile tickets to populate workload and throughput. Cycle time requires completed tickets, and decision totals require ticket decision-log entries. Model tokens and cost are shown separately under Model Usage.</p></div>}
+      {tickets.length > 0 && !tickets.some((ticket) => ticket.status === 'done') && <div className="rounded-sm border border-line p-3 text-sm text-mut" role="status">Cycle time and completed-work metrics will appear after at least one ticket reaches Done.</div>}
       {/* KPI row */}
       <motion.div
         initial={{ opacity: 0, y: 8 }}

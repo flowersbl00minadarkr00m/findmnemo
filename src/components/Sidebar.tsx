@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { LLMSource, AgentState, View } from '../types'
 import { SOURCE_TEXT_COLORS, AGENT_STATE_COLORS } from '../types'
+import { PRIMARY_AREAS, primaryAreaForView, resolvePrimaryArea } from '../lib/workspace-navigation'
 
 interface AgentInfo {
   agent: LLMSource
@@ -17,16 +18,6 @@ interface Props {
   ticketCount: number
   emailCount: number
 }
-
-const NAV_ITEMS: { id: View; label: string; icon: string }[] = [
-  { id: 'operations', label: 'Operations Desk', icon: 'O' },
-  { id: 'brief', label: 'Daily Brief', icon: 'B' },
-  { id: 'tickets', label: 'Tickets', icon: 'T' },
-  { id: 'sdd', label: 'Projects/SDD', icon: 'S' },
-  { id: 'routing', label: 'Model Routing', icon: 'R' },
-  { id: 'analytics', label: 'Analytics', icon: 'A' },
-  { id: 'emails', label: 'Emails', icon: 'E' },
-]
 
 function ClownfishDefs() {
   return (
@@ -68,6 +59,7 @@ export function Sidebar({ agents, activeView, onNavigate, ticketCount, emailCoun
   const [collapsed, setCollapsed] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches,
   )
+  const activeArea = primaryAreaForView(activeView)
 
   useEffect(() => {
     const mobileQuery = window.matchMedia('(max-width: 768px)')
@@ -103,30 +95,37 @@ export function Sidebar({ agents, activeView, onNavigate, ticketCount, emailCoun
       </div>
 
       <nav className="flex-1 py-4 space-y-0.5">
-        {NAV_ITEMS.map((item) => (
+        {PRIMARY_AREAS.map((item) => (
           <button
             key={item.id}
-            onClick={() => onNavigate(item.id)}
+            onClick={() => onNavigate(resolvePrimaryArea(item.id, typeof window === 'undefined' ? undefined : window.localStorage))}
             title={collapsed ? item.label : undefined}
             aria-label={item.label}
-            aria-current={activeView === item.id ? 'page' : undefined}
+            aria-current={activeArea === item.id ? 'page' : undefined}
             className={`w-full flex items-center gap-3 px-4 py-2 text-sm transition-colors ${
-              activeView === item.id
+              activeArea === item.id
                 ? 'bg-chrome-raised text-white border-r-2 border-sync shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]'
                 : 'text-chrome-mut hover:text-chrome-ink hover:bg-chrome-raised/50'
             }`}
           >
-            <span className={`text-xs font-mono ${activeView === item.id ? 'text-sync' : ''}`}>{item.icon}</span>
+            <span className={`text-xs font-mono ${activeArea === item.id ? 'text-sync' : ''}`} aria-hidden="true">{item.marker}</span>
             {!collapsed && <span className="flex-1 text-left">{item.label}</span>}
-            {!collapsed && item.id === 'tickets' && ticketCount > 0 && (
-              <span className="text-[10px] font-mono border border-chrome-line rounded-sm px-1.5 py-0.5 text-chrome-mut tabular-nums">{ticketCount}</span>
+            {!collapsed && item.id === 'next-actions' && ticketCount > 0 && (
+              <span aria-label={`${ticketCount} open tickets`} className="text-[10px] font-mono border border-chrome-line rounded-sm px-1.5 py-0.5 text-chrome-mut tabular-nums">{ticketCount}</span>
             )}
-            {!collapsed && item.id === 'emails' && emailCount > 0 && (
-              <span className="text-[10px] font-mono border border-memory/50 rounded-sm px-1.5 py-0.5 text-memory tabular-nums">{emailCount}</span>
+            {!collapsed && item.id === 'outreach' && emailCount > 0 && (
+              <span aria-label={`${emailCount} emails need attention`} className="text-[10px] font-mono border border-memory/50 rounded-sm px-1.5 py-0.5 text-memory tabular-nums">{emailCount}</span>
             )}
           </button>
         ))}
       </nav>
+
+      <div className="border-t border-chrome-line px-2 py-2">
+        <button type="button" onClick={() => onNavigate('settings')} aria-label="Data & Privacy settings" aria-current={activeView === 'settings' ? 'page' : undefined} title={collapsed ? 'Data & Privacy' : undefined} className={`w-full flex items-center gap-3 rounded-sm px-2 py-2 text-sm ${activeView === 'settings' ? 'bg-chrome-raised text-white' : 'text-chrome-mut hover:text-chrome-ink hover:bg-chrome-raised/50'}`}>
+          <span className="text-xs font-mono text-memory" aria-hidden="true">⚙</span>
+          {!collapsed && <span>Data & Privacy</span>}
+        </button>
+      </div>
 
       <div className="border-t border-chrome-line p-3 space-y-2">
         {!collapsed && (

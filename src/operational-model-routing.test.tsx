@@ -33,7 +33,7 @@ describe('companion-backed Model Routing integration', () => {
     render(<App operationalRepository={createOperationalRepository()} />)
 
     expect((await screen.findAllByText(operationalTicket.title)).length).toBeGreaterThan(0)
-    fireEvent.click(screen.getByText('Tickets'))
+    fireEvent.click(screen.getByText('Next Actions'))
     fireEvent.click((await screen.findAllByTitle('Open ticket detail'))[0])
     fireEvent.click(screen.getByRole('button', { name: 'Recommend route' }))
 

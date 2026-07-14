@@ -5,6 +5,8 @@ import type {
   OperationalPolicyMigrationPreview,
   OperationalRoutingPolicy,
   RoutingExecutionProfile,
+  UsageQueryDto,
+  UsageRouteObservationDto,
 } from '../../../shared/companion-contract'
 import type { ModelRoutingPolicy } from '../../types'
 import type { OperationalRepository } from '../../lib/operational-repository'
@@ -17,6 +19,7 @@ import { RoutingPreview } from './RoutingPreview'
 interface Props {
   legacyPolicy: ModelRoutingPolicy
   operationalRepository?: OperationalRepository
+  onOpenUsage?: (filters: UsageQueryDto) => void
 }
 
 type ToolChoice = 'pi-rpc' | 'manual'
@@ -41,7 +44,30 @@ function describeError(cause: unknown): string {
   return cause instanceof Error ? cause.message : 'The companion could not complete that routing operation.'
 }
 
-export function GuidedRoutingSetup({ legacyPolicy, operationalRepository }: Props) {
+const USAGE_OBSERVATION_LABELS: Record<UsageRouteObservationDto['observation'], string> = {
+  'most-used-route': 'Past usage: most used',
+  'no-observed-usage': 'Past usage: none observed',
+  'high-estimated-cost-concentration': 'Past usage: high estimated-cost concentration',
+  'configured-but-unmapped': 'Past usage: configured but unmapped',
+  'usage-evidence-incomplete': 'Past usage: evidence incomplete',
+}
+
+function usagePeriod(): UsageQueryDto {
+  const end = new Date()
+  const start = new Date(end)
+  start.setUTCMonth(start.getUTCMonth() - 12)
+  return {
+    start: start.toISOString().slice(0, 10),
+    end: end.toISOString().slice(0, 10),
+    clientId: null,
+    providerId: null,
+    modelId: null,
+    profileId: null,
+    mappingState: null,
+  }
+}
+
+export function GuidedRoutingSetup({ legacyPolicy, operationalRepository, onOpenUsage }: Props) {
   const [policy, setPolicy] = useState<OperationalRoutingPolicy | null>()
   const [discovery, setDiscovery] = useState<DestinationDiscoveryDto>()
   const [catalog, setCatalog] = useState<DestinationModelCatalogDto>()
@@ -57,6 +83,7 @@ export function GuidedRoutingSetup({ legacyPolicy, operationalRepository }: Prop
   const [enabled, setEnabled] = useState(false)
   const [behavior, setBehavior] = useState<'recommend' | 'auto-exact'>('recommend')
   const [savedProfileId, setSavedProfileId] = useState<string>()
+  const [usageObservations, setUsageObservations] = useState<UsageRouteObservationDto[]>([])
 
   const operational = Boolean(
     operationalRepository?.getRoutingPolicy
@@ -75,6 +102,18 @@ export function GuidedRoutingSetup({ legacyPolicy, operationalRepository }: Prop
       .catch(() => undefined)
     return () => { active = false }
   }, [operationalRepository])
+
+  useEffect(() => {
+    if (!operationalRepository?.getUsageRouteObservations || !policy) {
+      setUsageObservations([])
+      return
+    }
+    let active = true
+    void operationalRepository.getUsageRouteObservations(usagePeriod())
+      .then((observations) => { if (active) setUsageObservations(observations) })
+      .catch(() => { if (active) setUsageObservations([]) })
+    return () => { active = false }
+  }, [operationalRepository, policy])
 
   const capabilities = policy?.capabilities ?? legacyPolicy.capabilities
   const models = useMemo(() => catalog?.models.filter((model) => !providerId || model.providerId === providerId) ?? [], [catalog, providerId])
@@ -287,7 +326,32 @@ export function GuidedRoutingSetup({ legacyPolicy, operationalRepository }: Prop
           <p className="hud-label">Step 2</p><h2 id="routing-step-two" className="mt-1 text-lg font-semibold text-chrome-ink">Choose the work and exact model</h2>
           {policy && policy.profiles.length > 0 && (
             <div className="mt-3 flex max-w-full gap-2 overflow-x-auto pb-1" aria-label="Saved profiles">
-              {policy.profiles.map((profile) => <button key={profile.id} type="button" onClick={() => chooseExistingProfile(profile)} className="shrink-0 rounded-sm border border-chrome-line px-3 py-2 text-xs text-chrome-mut hover:text-chrome-ink">Edit {profile.displayName}</button>)}
+              {policy.profiles.map((profile) => {
+                const observation = usageObservations.find((item) => item.profileId === profile.id)
+                return (
+                  <div key={profile.id} className="flex shrink-0 items-stretch overflow-hidden rounded-sm border border-chrome-line">
+                    <button type="button" onClick={() => chooseExistingProfile(profile)} className="px-3 py-2 text-xs text-chrome-mut hover:text-chrome-ink">Edit {profile.displayName}</button>
+                    {observation && onOpenUsage && (
+                      <button
+                        type="button"
+                        onClick={() => onOpenUsage({
+                          ...usagePeriod(),
+                          start: observation.periodStart,
+                          end: observation.periodEnd,
+                          providerId: profile.providerId,
+                          modelId: profile.modelId,
+                          profileId: observation.observation === 'configured-but-unmapped' ? null : profile.id,
+                          mappingState: observation.observation === 'configured-but-unmapped' ? 'unmapped' : null,
+                        })}
+                        aria-label={`${USAGE_OBSERVATION_LABELS[observation.observation]} for ${profile.displayName}; open filtered usage`}
+                        className="border-l border-chrome-line bg-chrome/60 px-3 py-2 text-[10px] font-medium text-memory hover:bg-memory/10"
+                      >
+                        {USAGE_OBSERVATION_LABELS[observation.observation]}
+                      </button>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           )}
           <div className="mt-4 grid gap-4 sm:grid-cols-2">

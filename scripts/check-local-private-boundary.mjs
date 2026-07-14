@@ -20,6 +20,14 @@ const RULES = [
   ['routing-prompt-canary', /ROUTING_PROMPT_PRIVATE_CANARY/g],
   ['routing-result-canary', /ROUTING_RESULT_PRIVATE_CANARY/g],
   ['routing-credential-canary', /ROUTING_CREDENTIAL_PRIVATE_CANARY/g],
+  ['usage-prompt-canary', /USAGE_PROMPT_PRIVATE_CANARY/g],
+  ['usage-response-canary', /USAGE_RESPONSE_PRIVATE_CANARY/g],
+  ['usage-account-canary', /USAGE_ACCOUNT_PRIVATE_CANARY/g],
+  ['usage-raw-output-canary', /USAGE_RAW_OUTPUT_PRIVATE_CANARY/g],
+  ['usage-private-path-canary', /USAGE_PRIVATE_PATH_CANARY/g],
+  ['usage-session-canary', /USAGE_SESSION_PRIVATE_CANARY/g],
+  ['usage-workspace-canary', /USAGE_WORKSPACE_PRIVATE_CANARY/g],
+  ['usage-export-canary', /USAGE_EXPORT_PRIVATE_CANARY/g],
 ]
 
 export function scanText(text) {
@@ -45,9 +53,25 @@ async function main() {
     `{"refresh_${'token'}":"private"}`, `SUPABASE_SERVICE_ROLE_KEY="${'x'.repeat(16)}"`,
     `${'RAW'}_LEDGER_${'PRIVATE_MARKER'}`, `{"sessionToken":"${'x'.repeat(24)}"}`,
     'ROUTING_PROMPT_PRIVATE_CANARY', 'ROUTING_RESULT_PRIVATE_CANARY', 'ROUTING_CREDENTIAL_PRIVATE_CANARY',
+    'USAGE_PROMPT_PRIVATE_CANARY', 'USAGE_RESPONSE_PRIVATE_CANARY', 'USAGE_ACCOUNT_PRIVATE_CANARY',
+    'USAGE_RAW_OUTPUT_PRIVATE_CANARY', 'USAGE_PRIVATE_PATH_CANARY',
+    'USAGE_SESSION_PRIVATE_CANARY', 'USAGE_WORKSPACE_PRIVATE_CANARY',
+    'USAGE_EXPORT_PRIVATE_CANARY',
   ]
   for (const fixture of forbiddenFixtures) if (scanText(fixture).length !== 1) throw new Error('Privacy scanner self-test failed to reject a forbidden fixture.')
   if (scanText('{"runId":"run-1","count":2,"sourceId":"gmail-followups","result":"partial"}').length) throw new Error('Privacy scanner rejected an approved minimized record.')
+
+  const usageCommandRunner = await readFile(path.join(ROOT, 'server', 'usage', 'tokscale-command-runner.ts'), 'utf8')
+  const declaredRecipes = [...usageCommandRunner.matchAll(/^\s*'([^']+)',?$/gm)].map((match) => match[1])
+  const allowedRecipes = ['version', 'clients', 'canonical-graph', 'session-attribution', 'workspace-attribution']
+  if (!allowedRecipes.every((recipe) => declaredRecipes.includes(recipe))) throw new Error('Tokscale closed recipe manifest is incomplete.')
+  if (/\b(?:login|submit|autosubmit|leaderboard|social|quota|account-switch|profile|sync)\b/i.test(usageCommandRunner)) throw new Error('Forbidden Tokscale command entered the production invocation path.')
+  if (/shell\s*:\s*true/.test(usageCommandRunner)) throw new Error('Tokscale command execution must never use a shell.')
+  if (!usageCommandRunner.includes('minimizedTokscaleEnvironment()')) throw new Error('Tokscale recipes must use the minimized child environment.')
+  const usageRefreshService = await readFile(path.join(ROOT, 'server', 'usage', 'usage-refresh-service.ts'), 'utf8')
+  if (/\b(?:setInterval|cron|scheduler|startupRefresh|backgroundRefresh)\b/.test(usageRefreshService)) throw new Error('Scheduled Tokscale refresh entered the manual-only MVP path.')
+  const usageExport = await readFile(path.join(ROOT, 'server', 'usage', 'usage-export.ts'), 'utf8')
+  if (!usageExport.includes('assertUsageBoundarySafe') || !usageExport.includes('csvCell')) throw new Error('Usage export must retain boundary validation and spreadsheet neutralization.')
 
   const roots = ['src', 'server', 'shared', 'dist', 'dist-companion'].map((entry) => path.join(ROOT, entry))
   const defaultRuntimeRoot = process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'FindMnemo') : undefined

@@ -1,12 +1,10 @@
-import { lazy, Suspense, useState, useCallback, useEffect, useMemo, useRef } from 'react'
+import { lazy, Suspense, useState, useCallback, useEffect, useMemo } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import type { AttentionAction, AttentionItem, HomeView, Ticket, AgentActivity, View, LLMSource, ProjectProgressItem, ModelRoutingPolicy } from './types'
+import type { AttentionAction, AttentionItem, HomeView, MetricsView, Ticket, AgentActivity, View, LLMSource, ModelRoutingPolicy } from './types'
 import type { OperationalRepository } from './lib/operational-repository'
 import type { GmailSourceStatus } from './lib/operational-repository'
-import type { GmailCandidateDto, GmailCheckDto, ReconciliationRunDto, SourceDescriptor, SourceId } from '../shared/companion-contract'
-import { downloadTelemetry, loadTelemetry, importTelemetryJSONL } from './lib/telemetry'
+import type { GmailCandidateDto, GmailCheckDto, ReconciliationRunDto, SourceDescriptor, SourceId, UsageQueryDto } from '../shared/companion-contract'
 import { pollReconciliationRun, recordReconciliationTelemetry } from './lib/reconciliation'
-import { projectProgressToGatePlaceholderTicket } from './lib/generated-tickets'
 import {
   MODEL_ROUTING_POLICY_CHANGED_EVENT,
   MODEL_ROUTING_POLICY_STORAGE_KEY,
@@ -17,7 +15,8 @@ import { Sidebar } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
 import { OperationsDesk } from './components/OperationsDesk'
 import { projectAttentionWorkspace } from './lib/attention-workspace'
-import { loadHomeViewPreference, saveHomeViewPreference } from './lib/view-preference'
+import { loadHomeViewPreference, saveHomeViewPreference, saveMetricsViewPreference } from './lib/view-preference'
+import { MetricsViewSwitch } from './components/WorkspaceViewSwitch'
 import { TicketBoard } from './components/TicketBoard'
 import { NewTicketForm } from './components/NewTicketForm'
 import { CommandPalette } from './components/CommandPalette'
@@ -28,8 +27,9 @@ import { LegacyMigrationPanel } from './components/LegacyMigrationPanel'
 const Analytics = lazy(() => import('./components/Analytics').then((module) => ({ default: module.Analytics })))
 const DailyBrief = lazy(() => import('./components/DailyBrief').then((module) => ({ default: module.DailyBrief })))
 const EmailPanel = lazy(() => import('./components/EmailPanel').then((module) => ({ default: module.EmailPanel })))
-const ProjectProgressView = lazy(() => import('./components/ProjectProgressView').then((module) => ({ default: module.ProjectProgressView })))
 const ModelRoutingView = lazy(() => import('./components/ModelRoutingView').then((module) => ({ default: module.ModelRoutingView })))
+const UsageView = lazy(() => import('./components/UsageView').then((module) => ({ default: module.UsageView })))
+const DataPrivacyView = lazy(() => import('./components/DataPrivacyView').then((module) => ({ default: module.DataPrivacyView })))
 
 interface RoutingPolicyState {
   policy: ModelRoutingPolicy
@@ -57,9 +57,6 @@ export default function App({ operationalRepository }: { operationalRepository: 
   const [gmailCheck, setGmailCheck] = useState<GmailCheckDto>()
   const [gmailSourceStatus, setGmailSourceStatus] = useState<GmailSourceStatus>()
   const [gmailError, setGmailError] = useState<string>()
-  const [projectProgress, setProjectProgress] = useState<ProjectProgressItem[]>([])
-  const [projectProgressLoading, setProjectProgressLoading] = useState(false)
-  const [projectProgressError, setProjectProgressError] = useState<string | undefined>()
   const [routingPolicyState, setRoutingPolicyState] = useState<RoutingPolicyState>(loadInitialRoutingPolicy)
   const [emailLoading, setEmailLoading] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
@@ -67,6 +64,7 @@ export default function App({ operationalRepository }: { operationalRepository: 
   const [highlightId, setHighlightId] = useState<string | null>(null)
   const [detailId, setDetailId] = useState<string | null>(null)
   const [routingTicketId, setRoutingTicketId] = useState<string | null>(null)
+  const [usageInitialFilters, setUsageInitialFilters] = useState<UsageQueryDto>()
   const [reconciliationRun, setReconciliationRun] = useState<ReconciliationRunDto>()
   const [reconciliationSources, setReconciliationSources] = useState<SourceDescriptor[]>([])
   const [reconciliationBusy, setReconciliationBusy] = useState(false)
@@ -74,8 +72,6 @@ export default function App({ operationalRepository }: { operationalRepository: 
   const [lastReconciliationSuccess, setLastReconciliationSuccess] = useState<string>()
   const [selectedAttentionId, setSelectedAttentionId] = useState<string>()
   const [chooseGmailThreadId, setChooseGmailThreadId] = useState<string>()
-  const [telemetryCount, setTelemetryCount] = useState(() => loadTelemetry().length)
-  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const refreshOperationalTickets = useCallback(async () => {
     setOperationalTicketState((state) => state === 'current' ? 'current' : 'loading')
@@ -121,22 +117,6 @@ export default function App({ operationalRepository }: { operationalRepository: 
       })
       .catch((cause) => setReconciliationError(cause instanceof Error ? cause.message : 'Reconciliation history is unavailable.'))
   }, [operationalRepository])
-
-  const refreshProjectProgress = useCallback(async () => {
-    setProjectProgress([])
-    setProjectProgressError('Project/SDD records are reconciled through the configured companion source and appear as tickets.')
-    setProjectProgressLoading(false)
-  }, [])
-
-  useEffect(() => {
-    const refreshTelemetry = () => setTelemetryCount(loadTelemetry().length)
-    window.addEventListener('mnemosync-telemetry', refreshTelemetry)
-    refreshProjectProgress()
-
-    return () => {
-      window.removeEventListener('mnemosync-telemetry', refreshTelemetry)
-    }
-  }, [refreshProjectProgress])
 
   useEffect(() => {
     const refreshRoutingPolicy = () => {
@@ -217,37 +197,6 @@ export default function App({ operationalRepository }: { operationalRepository: 
     setRoutingTicketId(ticket.id)
     setDetailId(null)
     setView('routing')
-  }, [])
-
-  const handleExportTelemetry = useCallback(() => {
-    if (!downloadTelemetry()) {
-      window.alert('No activity has been recorded yet. Create or update a ticket, then export again.')
-    }
-  }, [])
-
-  const handleExportObservedWork = useCallback(async () => {
-    const { downloadObservedWorkExport } = await import('./lib/ontology')
-    const result = downloadObservedWorkExport()
-    if (!result.ok) window.alert(result.message)
-  }, [])
-
-  const handleImportTelemetry = useCallback(() => {
-    fileInputRef.current?.click()
-  }, [])
-
-  const handleFileSelected = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    const reader = new FileReader()
-    reader.onload = () => {
-      const result = importTelemetryJSONL(reader.result as string)
-      setTelemetryCount(loadTelemetry().length)
-      const msg = `Imported ${result.imported} event(s).${result.skipped > 0 ? ` Skipped ${result.skipped} (duplicates or invalid).` : ''}${result.errors.length > 0 ? `\nErrors:\n${result.errors.join('\n')}` : ''}`
-      window.alert(msg)
-    }
-    reader.readAsText(file)
-    // Reset so the same file can be re-selected
-    e.target.value = ''
   }, [])
 
   const handleRefreshEmails = useCallback(async () => {
@@ -420,9 +369,11 @@ export default function App({ operationalRepository }: { operationalRepository: 
   const handleNavigate = useCallback((v: View) => {
     setView(v)
     if (v === 'operations' || v === 'brief') saveHomeViewPreference(window.localStorage, v)
+    if (v === 'usage' || v === 'analytics') saveMetricsViewPreference(window.localStorage, v)
   }, [])
 
   const handleHomeViewChange = useCallback((next: HomeView) => handleNavigate(next), [handleNavigate])
+  const handleMetricsViewChange = useCallback((next: MetricsView) => handleNavigate(next), [handleNavigate])
 
   const agentList = activities.map((a) => ({
     agent: a.agent,
@@ -433,14 +384,7 @@ export default function App({ operationalRepository }: { operationalRepository: 
   }))
 
   const pendingEmails = gmailCandidates.filter((candidate) => candidate.state === 'candidate' || candidate.state === 'deferred').length
-  const generatedProjectTickets = useMemo(
-    () => projectProgress.filter(isActiveGatePlaceholder).map(projectProgressToGatePlaceholderTicket),
-    [projectProgress],
-  )
-  const ticketsWithGenerated = useMemo(
-    () => mergeTickets([...tickets, ...generatedProjectTickets]),
-    [tickets, generatedProjectTickets],
-  )
+  const ticketsWithGenerated = tickets
   const attentionProjection = useMemo(() => projectAttentionWorkspace({
     tickets: ticketsWithGenerated,
     gmailCandidates,
@@ -480,18 +424,7 @@ export default function App({ operationalRepository }: { operationalRepository: 
         <TopBar
           view={view}
           onOpenPalette={() => setPaletteOpen(true)}
-          telemetryCount={telemetryCount}
-          onExportTelemetry={handleExportTelemetry}
-          onImportTelemetry={handleImportTelemetry}
-          onExportObservedWork={handleExportObservedWork}
-        />
-
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".jsonl,.json,.txt"
-          onChange={handleFileSelected}
-          className="hidden"
+          onOpenSettings={() => setView('settings')}
         />
 
         <main className="flex-1 overflow-y-auto">
@@ -503,7 +436,7 @@ export default function App({ operationalRepository }: { operationalRepository: 
               </div>
             )}
             <LegacyMigrationPanel repository={operationalRepository} onImported={() => void refreshOperationalTickets()} />
-            <AnimatePresence mode="wait">
+            <AnimatePresence initial={false}>
               <motion.div
                 key={view}
                 initial={{ opacity: 0, y: 6 }}
@@ -564,17 +497,6 @@ export default function App({ operationalRepository }: { operationalRepository: 
                     </div>
                   )}
 
-                  {view === 'sdd' && (
-                    <ProjectProgressView
-                      items={projectProgress}
-                      tickets={ticketsWithGenerated}
-                      loading={projectProgressLoading}
-                      error={projectProgressError}
-                      onRefresh={refreshProjectProgress}
-                      onOpenDetail={handleOpenDetail}
-                    />
-                  )}
-
                   {view === 'routing' && (
                     <ModelRoutingView
                       policy={routingPolicyState.policy}
@@ -582,10 +504,19 @@ export default function App({ operationalRepository }: { operationalRepository: 
                       ticket={ticketsWithGenerated.find((ticket) => ticket.id === routingTicketId)}
                       onPolicyChange={(policy) => setRoutingPolicyState({ policy })}
                       operationalRepository={operationalRepository}
+                      onOpenUsage={(filters) => {
+                        setUsageInitialFilters(filters)
+                        setView('usage')
+                      }}
                     />
                   )}
 
-                  {view === 'analytics' && <Analytics tickets={tickets} />}
+                  {(view === 'usage' || view === 'analytics') && (
+                    <div className="space-y-4">
+                      <div className="flex justify-end"><MetricsViewSwitch value={view} onChange={handleMetricsViewChange} /></div>
+                      {view === 'analytics' ? <Analytics tickets={tickets} /> : <UsageView repository={operationalRepository} initialFilters={usageInitialFilters} />}
+                    </div>
+                  )}
 
                   {view === 'emails' && (
                     <EmailPanel
@@ -603,6 +534,7 @@ export default function App({ operationalRepository }: { operationalRepository: 
                       loading={emailLoading}
                     />
                   )}
+                  {view === 'settings' && <DataPrivacyView repository={operationalRepository} onImported={() => void refreshOperationalTickets()} onNavigate={handleNavigate} />}
                 </Suspense>
               </motion.div>
             </AnimatePresence>
@@ -627,18 +559,6 @@ export default function App({ operationalRepository }: { operationalRepository: 
       />
     </div>
   )
-}
-
-function mergeTickets(items: Ticket[]): Ticket[] {
-  const byId = new Map<string, Ticket>()
-  for (const item of items) {
-    byId.set(item.id, item)
-  }
-  return [...byId.values()]
-}
-
-function isActiveGatePlaceholder(item: ProjectProgressItem): boolean {
-  return item.currentGate !== 'uninitialized' && item.currentGate !== 'review:done'
 }
 
 function ViewLoading() {

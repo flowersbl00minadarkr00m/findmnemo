@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import type { Ticket, View } from '../types'
 import { SOURCE_TEXT_COLORS, STATUS_LABELS } from '../types'
+import { PRIMARY_AREAS, resolvePrimaryArea } from '../lib/workspace-navigation'
 
 interface Command {
   id: string
@@ -27,21 +28,15 @@ export function CommandPalette({ open, onClose, tickets, onNavigate, onJumpToTic
   const listRef = useRef<HTMLDivElement>(null)
 
   const commands = useMemo<Command[]>(() => {
-    const nav: Command[] = ([
-      ['operations', 'Go to Operations Desk'],
-      ['brief', 'Go to Daily Brief'],
-      ['tickets', 'Go to Tickets'],
-      ['sdd', 'Go to Projects/SDD'],
-      ['routing', 'Go to Model Routing'],
-      ['analytics', 'Go to Analytics'],
-      ['emails', 'Go to Emails'],
-    ] as [View, string][]).map(([view, label]) => ({
-      id: `nav-${view}`,
-      label,
+    const nav: Command[] = PRIMARY_AREAS.map((area) => ({
+      id: `nav-${area.id}`,
+      label: `Go to ${area.label}`,
+      hint: area.id === 'next-actions' ? 'SDD work appears as tickets' : undefined,
       section: 'Navigate' as const,
-      keywords: `${view} ${label}`.toLowerCase(),
-      run: () => { onNavigate(view); onClose() },
+      keywords: `${area.id} ${area.label} ${area.description} ${area.keywords.join(' ')}`.toLowerCase(),
+      run: () => { onNavigate(resolvePrimaryArea(area.id, typeof window === 'undefined' ? undefined : window.localStorage)); onClose() },
     }))
+    nav.push({ id: 'nav-settings', label: 'Open Data & Privacy', hint: 'download, restore, compatibility', section: 'Navigate', keywords: 'settings data privacy compatibility export import telemetry', run: () => { onNavigate('settings'); onClose() } })
 
     const actions: Command[] = [
       {

@@ -54,9 +54,9 @@ Validation is atomic: unsupported profiles/actions, missing required fields, or 
 
 ## Product and deployment rename boundary
 
-`https://findmnemo.vercel.app` is the preferred future public URL. `https://mnemosync.vercel.app` remains the legacy fallback or alias until its removal is separately approved and verified.
+`https://findmnemo.vercel.app` is the preferred public URL. `https://mnemosync.vercel.app` remains the legacy fallback until its removal is separately approved and verified.
 
-GitHub repository renames, Vercel project/domain changes, redirects, link updates, and alias removal are external operations. They are not automatic consequences of the FindMnemo UI rename and require explicit approval plus verification of deployment health, redirects/aliases, environment bindings, documentation links, integrations, and rollback. Until that work is approved and completed, documentation and compatibility reports must not imply that the deployment URL or machine identifiers have migrated.
+GitHub repository renames, Vercel project/domain changes, redirects, link updates, and alias removal are external operations. They are not automatic consequences of the FindMnemo UI rename and require explicit approval plus verification of deployment health, redirects/aliases, environment bindings, documentation links, integrations, and rollback. The Vercel project and preferred public URL migrated to FindMnemo on 2026-07-14; machine identifiers and the legacy alias remain unchanged.
 
 ## Verification commands
 

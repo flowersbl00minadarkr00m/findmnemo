@@ -8,7 +8,7 @@ export function LegacyMigrationPanel({ repository, onImported }: { repository: O
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string>()
   useEffect(() => { void previewLegacyMigration(repository).then((preview) => { setRecords(preview.records); setResult(preview.result) }).catch(() => undefined) }, [repository])
-  if (!result || records.length === 0) return null
+  if (!result || records.length === 0 || (result.eligible === 0 && result.conflicts === 0)) return null
   return <section className="mb-4 rounded-sm border border-memory/40 bg-memory/10 px-4 py-3 text-sm" aria-label="Legacy ticket migration">
     <p className="font-semibold text-ink">Legacy browser tickets found</p>
     <p className="mt-1 text-mut">Preview: {result.eligible} eligible, {result.conflicts} conflicts, {result.excluded} excluded. Demo/sample and private unsupported records are never imported. Original browser storage remains untouched.</p>

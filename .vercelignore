@@ -1,0 +1,35 @@
+# Dependencies and generated build/package outputs
+node_modules/
+dist/
+dist-*/
+release-desktop*/
+outputs/
+build/
+
+# Desktop-only and development evidence
+desktop/
+desktop.html
+release-evidence/
+docs/screenshots/
+.playwright-cli/
+.ai/
+
+# Local companion state and private machine material
+logs/
+*.log
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.dpapi
+*.support.zip
+.env
+.env.*
+!.env.example
+
+# Local-only compatibility and media briefs
+CLOWNFISH_RESKIN.md
+mnemosync_telemetry.py
+__pycache__/
+*.pyc

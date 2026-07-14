@@ -1,0 +1,38 @@
+{
+  "meta": {
+    "generatedAt": "2026-07-13T11:55:00Z",
+    "version": "4.5.2",
+    "dateRange": { "start": "2026-07-13", "end": "2026-07-13" }
+  },
+  "summary": {
+    "totalTokens": 190,
+    "totalCost": 0.42,
+    "totalDays": 1,
+    "activeDays": 1,
+    "averagePerDay": 190,
+    "maxCostInSingleDay": 0.42,
+    "clients": ["codex"],
+    "models": ["openai/gpt-5"]
+  },
+  "years": [
+    { "year": "2026", "totalTokens": 190, "totalCost": 0.42, "range": { "start": "2026-07-13", "end": "2026-07-13" } }
+  ],
+  "contributions": [
+    {
+      "date": "2026-07-13",
+      "totals": { "tokens": 190, "cost": 0.42, "messages": 2 },
+      "intensity": 2,
+      "tokenBreakdown": { "input": 120, "output": 30, "cacheRead": 20, "cacheWrite": 10, "reasoning": 10 },
+      "clients": [
+        {
+          "client": "codex",
+          "modelId": "openai/gpt-5",
+          "providerId": "openrouter",
+          "tokens": { "input": 120, "output": 30, "cacheRead": 20, "cacheWrite": 10, "reasoning": 10 },
+          "cost": 0.42,
+          "messages": 2
+        }
+      ]
+    }
+  ]
+}

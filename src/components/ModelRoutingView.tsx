@@ -28,6 +28,7 @@ import {
 } from '../lib/model-routing-storage'
 import { recordRoutingDecision } from '../lib/model-routing-evidence'
 import type { OperationalRepository } from '../lib/operational-repository'
+import type { UsageQueryDto } from '../../shared/companion-contract'
 import { GuidedRoutingSetup } from './routing/GuidedRoutingSetup'
 import { DispatchHistory } from './routing/DispatchHistory'
 
@@ -37,6 +38,7 @@ export interface ModelRoutingViewProps {
   ticket?: Ticket
   onPolicyChange: (policy: ModelRoutingPolicy) => void
   operationalRepository?: OperationalRepository
+  onOpenUsage?: (filters: UsageQueryDto) => void
 }
 
 const ROUTE_KINDS: Array<{ value: ModelRouteKind; label: string }> = [
@@ -790,7 +792,11 @@ export function ModelRoutingView(props: ModelRoutingViewProps) {
       </div>
 
       {mode === 'guided' ? (
-        <GuidedRoutingSetup legacyPolicy={props.policy} operationalRepository={props.operationalRepository} />
+        <GuidedRoutingSetup
+          legacyPolicy={props.policy}
+          operationalRepository={props.operationalRepository}
+          onOpenUsage={props.onOpenUsage}
+        />
       ) : (
         <AdvancedRoutingPolicy {...props} />
       )}

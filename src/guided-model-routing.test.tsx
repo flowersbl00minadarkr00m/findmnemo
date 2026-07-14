@@ -26,6 +26,40 @@ function repository(overrides: Partial<OperationalRepository> = {}): Operational
 }
 
 describe('guided model routing', () => {
+  it('shows factual past-usage context without changing or dispatching a route', async () => {
+    const policy: OperationalRoutingPolicy = {
+      schemaVersion: '2.0.0',
+      policyProfile: 'findmnemo.model-routing.v2',
+      policyVersion: 3,
+      updatedAt: '2026-07-13T00:00:00.000Z',
+      capabilities: legacy.capabilities,
+      profiles: [{
+        id: 'profile:writing', displayName: 'Writing with Pi', destinationAdapterId: 'pi-rpc', destinationInstanceId: 'pi:default',
+        providerId: 'openrouter', modelId: 'anthropic/claude-sonnet-4', effort: 'high', capabilityIds: ['creation.writing'], enabled: true,
+        behavior: 'recommend', fallbackOrder: 0,
+        readiness: { state: 'ready', checkedAt: '2026-07-13T00:00:00.000Z', expiresAt: '2026-07-13T00:15:00.000Z', adapterVersion: '1.0.0', installedVersion: '0.80.3', reasonCode: null },
+      }],
+      defaultProfileOrder: ['profile:writing'],
+      capabilityOverrides: [],
+    }
+    const repo = repository({
+      getRoutingPolicy: vi.fn(async () => policy),
+      getUsageRouteObservations: vi.fn(async () => [{
+        profileId: 'profile:writing', observation: 'most-used-route' as const, recordCount: 8, totalTokens: 12000, estimatedCost: 1.25,
+        coverageComplete: true, periodStart: '2026-07-01', periodEnd: '2026-07-13',
+      }]),
+    })
+    const onOpenUsage = vi.fn()
+
+    render(<ModelRoutingView policy={legacy} onPolicyChange={vi.fn()} operationalRepository={repo} onOpenUsage={onOpenUsage} />)
+    const evidence = await screen.findByRole('button', { name: /Past usage: most used for Writing with Pi/i })
+    fireEvent.click(evidence)
+
+    expect(onOpenUsage).toHaveBeenCalledWith(expect.objectContaining({ profileId: 'profile:writing', start: '2026-07-01', end: '2026-07-13' }))
+    expect(repo.updateRoutingPolicy).not.toHaveBeenCalled()
+    expect(repo.discoverRoutingDestinations).not.toHaveBeenCalled()
+  })
+
   it('detects Pi without enabling anything and requires explicit profile choices', async () => {
     const repo = repository()
     render(<ModelRoutingView policy={legacy} onPolicyChange={vi.fn()} operationalRepository={repo} />)

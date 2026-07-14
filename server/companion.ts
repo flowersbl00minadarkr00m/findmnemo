@@ -30,6 +30,10 @@ import { RoutingIntegrationAuthService } from './routing/integration-auth.js'
 import { RoutingIntegrationApi } from './routing/integration-api.js'
 import { createPlatformSecretStore } from './auth/platform-secret-store.js'
 import type { SecretStore } from './auth/secret-store.js'
+import { TokscaleCommandRunner } from './usage/tokscale-command-runner.js'
+import { UsageRepository } from './usage/usage-repository.js'
+import { UsageRefreshService, type UsageCommandExecutor } from './usage/usage-refresh-service.js'
+import { DataPortabilityService } from './portability/data-portability-service.js'
 
 export const COMPANION_HOST = '127.0.0.1' as const
 export const COMPANION_PORT = 3210
@@ -60,6 +64,9 @@ export interface CompanionDependencies {
   piRoutingAdapter?: PiRoutingAdapter
   dispatchService?: DispatchService
   routingSecretStore?: SecretStore
+  tokscaleCommandRunner?: TokscaleCommandRunner
+  usageRefreshService?: UsageRefreshService
+  usageCommandExecutor?: UsageCommandExecutor
 }
 
 export interface RunningCompanion {
@@ -87,6 +94,9 @@ export async function startCompanion({
   piRoutingAdapter,
   dispatchService,
   routingSecretStore,
+  tokscaleCommandRunner,
+  usageRefreshService,
+  usageCommandExecutor,
 }: CompanionDependencies = {}): Promise<RunningCompanion> {
   if (host !== COMPANION_HOST) {
     throw new CompanionStartError('IDENTITY_MISMATCH', 'Companion host must be literal 127.0.0.1.')
@@ -102,6 +112,10 @@ export async function startCompanion({
   const operationalRepository = new OperationalRepository(database.db)
   const routingRepository = new RoutingRepository(database.db)
   const processRunner = new NodeRoutingProcessRunner()
+  const resolvedTokscaleCommandRunner = tokscaleCommandRunner ?? new TokscaleCommandRunner()
+  const usageRepository = new UsageRepository(database.db)
+  const resolvedUsageRefreshService = usageRefreshService ?? new UsageRefreshService(usageCommandExecutor ?? resolvedTokscaleCommandRunner, usageRepository, clock)
+  const dataPortabilityService = new DataPortabilityService(operationalRepository, routingRepository, usageRepository, companionVersion, clock)
   const resolvedPiRoutingAdapter = piRoutingAdapter ?? new PiRoutingAdapter(processRunner, undefined, clock)
   const resolvedDispatchService = dispatchService ?? new DispatchService(routingRepository, [resolvedPiRoutingAdapter], clock)
   const resolvedSecretStore = routingSecretStore ?? (await createPlatformSecretStore()).store
@@ -148,6 +162,10 @@ export async function startCompanion({
       piRoutingAdapter: resolvedPiRoutingAdapter,
       dispatchService: resolvedDispatchService,
       routingIntegrationApi,
+      tokscaleCommandRunner: resolvedTokscaleCommandRunner,
+      usageRefreshService: resolvedUsageRefreshService,
+      usageRepository,
+      dataPortabilityService,
       gmailServices: resolvedGmailServices,
       gmailCheckService,
       reconciliationEngine,

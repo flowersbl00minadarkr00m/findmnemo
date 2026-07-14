@@ -1,0 +1,28 @@
+{
+  "groupBy": "workspace,model",
+  "entries": [
+    {
+      "client": "claude",
+      "mergedClients": null,
+      "workspaceKey": "workspace-secret-v441",
+      "workspaceLabel": "<SANITIZED_PATH>",
+      "model": "claude-sonnet-4-5",
+      "provider": "anthropic",
+      "input": 20,
+      "output": 10,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "reasoning": 0,
+      "messageCount": 1,
+      "cost": 0,
+      "performance": { "msPer1KTokens": null, "totalDurationMs": 0, "timedTokens": 0, "sampleCount": 0, "tokenCoverage": 0 }
+    }
+  ],
+  "totalInput": 20,
+  "totalOutput": 10,
+  "totalCacheRead": 0,
+  "totalCacheWrite": 0,
+  "totalMessages": 1,
+  "totalCost": 0,
+  "processingTimeMs": 10
+}

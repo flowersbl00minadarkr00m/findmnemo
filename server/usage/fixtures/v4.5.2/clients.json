@@ -1,0 +1,18 @@
+{
+  "headlessRoots": ["<SANITIZED_PATH>"],
+  "clients": [
+    {
+      "client": "codex",
+      "label": "Codex",
+      "sessionsPath": "<SANITIZED_PATH>",
+      "sessionsPathExists": true,
+      "additionalPaths": [{ "path": "<SANITIZED_PATH>", "exists": true }],
+      "messageCount": 7,
+      "headlessSupported": true,
+      "headlessPaths": [{ "path": "<SANITIZED_PATH>", "exists": true }],
+      "headlessMessageCount": 2,
+      "diagnostics": [{ "code": "INDEX_PARTIAL", "message": "Sanitized diagnostic" }]
+    }
+  ],
+  "note": "Headless capture is supported for Codex CLI only."
+}

@@ -4,7 +4,7 @@ import { dirname, isAbsolute } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { PlatformPathError, resolvePlatformPaths, type ResolvePlatformPathsInput } from '../platform/platform-paths.js'
 
-export const DATABASE_SCHEMA_VERSION = 5
+export const DATABASE_SCHEMA_VERSION = 6
 
 const MIGRATION_001 = `
 CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -123,6 +123,69 @@ CREATE TABLE IF NOT EXISTS routing_model_catalogs (
 UPDATE app_meta SET value='5' WHERE key='schema_version';
 `
 
+const MIGRATION_006 = `
+CREATE TABLE IF NOT EXISTS usage_refresh_runs (
+  id TEXT PRIMARY KEY, requested_at TEXT NOT NULL, finished_at TEXT,
+  state TEXT NOT NULL, coverage_start TEXT NOT NULL, coverage_end TEXT NOT NULL,
+  tokscale_version TEXT, adapter_id TEXT, error_code TEXT,
+  canonical_count INTEGER NOT NULL DEFAULT 0, attribution_count INTEGER NOT NULL DEFAULT 0,
+  warning_count INTEGER NOT NULL DEFAULT 0, warnings_json TEXT NOT NULL DEFAULT '[]'
+);
+CREATE INDEX IF NOT EXISTS usage_refresh_runs_finished_idx ON usage_refresh_runs(finished_at DESC);
+CREATE TABLE IF NOT EXISTS usage_command_outcomes (
+  run_id TEXT NOT NULL REFERENCES usage_refresh_runs(id) ON DELETE CASCADE,
+  recipe_id TEXT NOT NULL, state TEXT NOT NULL, duration_ms INTEGER NOT NULL,
+  record_count INTEGER, error_code TEXT, PRIMARY KEY(run_id, recipe_id)
+);
+CREATE TABLE IF NOT EXISTS usage_canonical_records (
+  id TEXT PRIMARY KEY, refresh_run_id TEXT NOT NULL REFERENCES usage_refresh_runs(id) ON DELETE CASCADE,
+  period_start TEXT NOT NULL, period_end TEXT NOT NULL, client_id TEXT NOT NULL,
+  provider_id TEXT, model_id TEXT NOT NULL, profile_id TEXT,
+  input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER,
+  cache_write_tokens INTEGER, reasoning_tokens INTEGER, total_tokens INTEGER,
+  cost REAL, currency TEXT, record_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS usage_canonical_period_idx ON usage_canonical_records(period_start, period_end);
+CREATE INDEX IF NOT EXISTS usage_canonical_client_idx ON usage_canonical_records(client_id, period_start);
+CREATE INDEX IF NOT EXISTS usage_canonical_provider_model_idx ON usage_canonical_records(provider_id, model_id, period_start);
+CREATE INDEX IF NOT EXISTS usage_canonical_profile_idx ON usage_canonical_records(profile_id, period_start);
+CREATE TABLE IF NOT EXISTS usage_attribution_records (
+  id TEXT PRIMARY KEY, refresh_run_id TEXT NOT NULL REFERENCES usage_refresh_runs(id) ON DELETE CASCADE,
+  role TEXT NOT NULL, coverage_start TEXT NOT NULL, coverage_end TEXT NOT NULL,
+  client_id TEXT, provider_id TEXT, model_id TEXT NOT NULL, opaque_subject_id TEXT NOT NULL,
+  record_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS usage_attribution_subject_idx ON usage_attribution_records(opaque_subject_id, role);
+CREATE INDEX IF NOT EXISTS usage_attribution_window_idx ON usage_attribution_records(coverage_start, coverage_end);
+CREATE TABLE IF NOT EXISTS usage_source_coverage (
+  run_id TEXT NOT NULL REFERENCES usage_refresh_runs(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL, state TEXT NOT NULL, message_count INTEGER,
+  diagnostic_codes_json TEXT NOT NULL, PRIMARY KEY(run_id, client_id)
+);
+CREATE TABLE IF NOT EXISTS usage_duplicate_conflicts (
+  run_id TEXT NOT NULL REFERENCES usage_refresh_runs(id) ON DELETE CASCADE,
+  record_id TEXT NOT NULL, PRIMARY KEY(run_id, record_id)
+);
+CREATE TABLE IF NOT EXISTS usage_route_mappings (
+  identity_key TEXT PRIMARY KEY, client_id TEXT NOT NULL, provider_id TEXT, model_id TEXT NOT NULL,
+  profile_id TEXT NOT NULL, source TEXT NOT NULL,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS usage_local_labels (
+  opaque_subject_id TEXT PRIMARY KEY, label TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS usage_identity_config (
+  singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1), hmac_salt_hex TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS usage_state (
+  singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1),
+  last_success_run_id TEXT, last_success_at TEXT,
+  FOREIGN KEY(last_success_run_id) REFERENCES usage_refresh_runs(id) ON DELETE SET NULL
+);
+INSERT OR IGNORE INTO usage_state(singleton_id,last_success_run_id,last_success_at) VALUES(1,NULL,NULL);
+UPDATE app_meta SET value='6' WHERE key='schema_version';
+`
+
 export interface OpenDatabaseOptions {
   path?: string
   localAppData?: string
@@ -166,6 +229,7 @@ export async function openFindMnemoDatabase(options: OpenDatabaseOptions = {}): 
     if (currentVersion < 3) runTransaction(db, () => db.exec(MIGRATION_003))
     if (currentVersion < 4) runTransaction(db, () => db.exec(MIGRATION_004))
     if (currentVersion < 5) runTransaction(db, () => db.exec(MIGRATION_005))
+    if (currentVersion < 6) runTransaction(db, () => db.exec(MIGRATION_006))
     recoverInterruptedRuns(db)
   } catch (cause) {
     db.close()
@@ -192,6 +256,9 @@ function recoverInterruptedRuns(db: DatabaseSync): void {
   db.prepare("UPDATE reconciliation_runs SET state='failed', finished_at=COALESCE(finished_at, datetime('now')) WHERE state IN ('queued','running')").run()
   if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='gmail_checks'").get()) {
     db.prepare("UPDATE gmail_checks SET state='failed',error_code='SOURCE_CHECK_FAILED',finished_at=COALESCE(finished_at,datetime('now')) WHERE state='running'").run()
+  }
+  if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='usage_refresh_runs'").get()) {
+    db.prepare("UPDATE usage_refresh_runs SET state='failed',error_code='USAGE_REFRESH_INTERRUPTED',finished_at=COALESCE(finished_at,datetime('now')) WHERE state IN ('requested','detecting','collecting','normalizing','committing')").run()
   }
 }
 

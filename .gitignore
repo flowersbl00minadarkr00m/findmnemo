@@ -53,6 +53,7 @@ __pycache__
 *.sw?
 
 .vercel
+.playwright-cli/
 
 # Local planning, machine-specific evidence, and legacy bridges are not public-release inputs.
 .ai/

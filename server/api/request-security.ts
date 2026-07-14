@@ -1,7 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 export const MAX_JSON_BODY_BYTES = 64 * 1024
-export const PRODUCTION_ORIGIN = 'https://mnemosync.vercel.app'
+export const PRODUCTION_ORIGIN = 'https://findmnemo.vercel.app'
+export const LEGACY_PRODUCTION_ORIGIN = 'https://mnemosync.vercel.app'
 
 export interface RequestSecurityOptions {
   allowedOrigins?: readonly string[]
@@ -17,7 +18,7 @@ export function allowedOrigin(request: IncomingMessage, options: RequestSecurity
     }
     return undefined
   }
-  const allowed = new Set([PRODUCTION_ORIGIN, ...(options.allowedOrigins ?? [])])
+  const allowed = new Set([PRODUCTION_ORIGIN, LEGACY_PRODUCTION_ORIGIN, ...(options.allowedOrigins ?? [])])
   if (options.allowDevelopmentOrigins && /^http:\/\/(127\.0\.0\.1|localhost):\d+$/.test(origin)) return origin
   const host = request.headers.host
   if (host && origin === `http://${host}` && /^127\.0\.0\.1:\d+$/.test(host)) return origin
@@ -40,18 +41,18 @@ export function validFetchMetadata(request: IncomingMessage): boolean {
   return site === undefined || site === 'same-origin' || site === 'same-site' || site === 'cross-site'
 }
 
-export async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
+export async function readJsonBody(request: IncomingMessage, maxBytes = MAX_JSON_BODY_BYTES): Promise<Record<string, unknown>> {
   if (!(request.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')) {
     throw new Error('JSON_CONTENT_TYPE_REQUIRED')
   }
   const declaredLength = Number(request.headers['content-length'] ?? 0)
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_JSON_BODY_BYTES) throw new Error('REQUEST_TOO_LARGE')
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) throw new Error('REQUEST_TOO_LARGE')
   const chunks: Buffer[] = []
   let size = 0
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
     size += buffer.byteLength
-    if (size > MAX_JSON_BODY_BYTES) throw new Error('REQUEST_TOO_LARGE')
+    if (size > maxBytes) throw new Error('REQUEST_TOO_LARGE')
     chunks.push(buffer)
   }
   const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))

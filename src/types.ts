@@ -1,8 +1,12 @@
 export type LLMSource = 'Pi' | 'Codex' | 'Claude Cowork'
 
-export type View = 'operations' | 'brief' | 'tickets' | 'sdd' | 'routing' | 'analytics' | 'emails'
+export type View = 'operations' | 'brief' | 'tickets' | 'routing' | 'usage' | 'analytics' | 'emails' | 'settings'
+
+export type PrimaryArea = 'my-day' | 'next-actions' | 'engines' | 'metrics' | 'outreach'
 
 export type HomeView = Extract<View, 'operations' | 'brief'>
+
+export type MetricsView = Extract<View, 'usage' | 'analytics'>
 
 export type AttentionItemKind = 'ticket' | 'gmail' | 'source'
 

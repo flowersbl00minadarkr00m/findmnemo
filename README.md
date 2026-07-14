@@ -2,6 +2,8 @@
 
 FindMnemo is MIT-licensed local-first software. macOS/Linux users can follow the zero-cost [source-run guide](docs/source-run.md); Windows users can build from source or use the separately labeled [unsigned preview](docs/unsigned-windows-preview.md). Platform claims are listed in [docs/platform-support.md](docs/platform-support.md).
 
+The hosted interface is available at [findmnemo.vercel.app](https://findmnemo.vercel.app). The previous `mnemosync.vercel.app` address remains a compatibility fallback.
+
 FindMnemo is a local-private operations workspace for tracking work across Pi, Codex, and Claude Cowork. It combines ticket management, SDD progress, Gmail follow-up triage, model-routing preferences, and source reconciliation without treating simulated or stale data as live evidence.
 
 ## Workspaces
@@ -36,7 +38,11 @@ npm run start:companion
 
 Open `http://127.0.0.1:3210/app` for the local operational surface. For frontend development, run `npm run dev` in a second shell.
 
-For chat-native model routing, configure the plain-language Guided view first, then connect the same local MCP server to [Codex](docs/model-routing/codex-setup.md) and/or [Claude Code](docs/model-routing/claude-code-setup.md). Pi is the initial controllable destination; other detected tools remain recommendation-only until separately qualified.
+For chat-native model routing, open **Engines** and configure the plain-language Guided view first, then connect the same local MCP server to [Codex](docs/model-routing/codex-setup.md) and/or [Claude Code](docs/model-routing/claude-code-setup.md). Pi is the initial controllable destination; other detected tools remain recommendation-only until separately qualified.
+
+For local model-usage analytics, open **Metrics**, choose **Model Usage**, and refresh manually. The Windows package includes the exact [qualified Tokscale collector](docs/compatibility/tokscale.md); locked source installs receive the matching platform dependency, so no separate global Tokscale installation is required. FindMnemo normalizes the local result without sending raw logs, prompts, responses, credentials, paths, or readable session/workspace identities to the browser. See the [navigation guide](docs/navigation.md), [model-usage guide](docs/model-usage.md), and [third-party notices](THIRD_PARTY_NOTICES.md).
+
+Use **Data & Privacy** to preview and download companion-owned data or safely add supported records from a FindMnemo bundle. See the [data portability guide](docs/data-privacy.md) for category, import, and privacy boundaries.
 
 On this machine, ensure development dependencies are included and `NODE_ENV` is not globally forced to `production` before starting Vite.
 
@@ -89,7 +95,7 @@ npm run companion:doctor
 
 ## Deployment
 
-The hosted client may be deployed to Vercel only after a compatible companion build is available. Production CSP and connection rules target the fixed loopback endpoint. The hosted client does not receive Gmail credentials or operational email data.
+The hosted client may be deployed to Vercel only after a compatible companion build is available. Production CSP and connection rules target the fixed loopback endpoint. The hosted client does not receive Gmail credentials or operational email data. The preferred production URL is `https://findmnemo.vercel.app`; `https://mnemosync.vercel.app` remains a legacy alias.
 
 Set `VITE_LOCAL_COMPANION_ENABLED=false` and redeploy to disable the hosted operational entry during rollback. This flag does not delete the companion SQLite database or revoke Gmail; only the explicit Disconnect action revokes the credential. The local fallback remains available.
 

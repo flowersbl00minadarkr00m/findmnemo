@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { HOME_VIEW_PREFERENCE_KEY, loadHomeViewPreference, saveHomeViewPreference } from './view-preference'
+import { HOME_VIEW_PREFERENCE_KEY, METRICS_VIEW_PREFERENCE_KEY, loadHomeViewPreference, loadMetricsViewPreference, saveHomeViewPreference, saveMetricsViewPreference } from './view-preference'
 
 class FakeStorage {
   values = new Map<string, string>()
@@ -35,5 +35,15 @@ describe('operational home-view preference', () => {
     expect(loadHomeViewPreference(unavailable)).toBe('operations')
     expect(saveHomeViewPreference(unavailable, 'brief')).toBe(false)
     expect(loadHomeViewPreference(undefined)).toBe('operations')
+  })
+
+  it('defaults Metrics to Model Usage and remembers only a valid explicit choice', () => {
+    const storage = new FakeStorage()
+    expect(loadMetricsViewPreference(storage)).toBe('usage')
+    expect(saveMetricsViewPreference(storage, 'analytics')).toBe(true)
+    expect(storage.writes).toEqual([[METRICS_VIEW_PREFERENCE_KEY, 'analytics']])
+    expect(loadMetricsViewPreference(storage)).toBe('analytics')
+    storage.values.set(METRICS_VIEW_PREFERENCE_KEY, 'combined')
+    expect(loadMetricsViewPreference(storage)).toBe('usage')
   })
 })

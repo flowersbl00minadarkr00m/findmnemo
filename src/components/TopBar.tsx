@@ -1,33 +1,18 @@
 import type { View } from '../types'
+import { VIEW_META } from '../lib/workspace-navigation'
 
 interface Props {
   view: View
   sample?: boolean
   onOpenPalette: () => void
-  telemetryCount: number
-  onExportTelemetry: () => void
-  onImportTelemetry: () => void
-  onExportObservedWork: () => void
-}
-
-const VIEW_META: Record<View, { title: string; subtitle: string }> = {
-  operations: { title: 'Operations Desk', subtitle: 'Prioritized work, evidence, and source health' },
-  brief: { title: 'Daily Brief', subtitle: 'A simplified pass over the same operational records' },
-  tickets: { title: 'Tickets', subtitle: 'Kanban board - drag cards between columns' },
-  sdd: { title: 'Projects/SDD', subtitle: 'Project gates, generated tickets, and receipt state' },
-  routing: { title: 'Model Routing', subtitle: 'Local capability-aware route preferences' },
-  analytics: { title: 'Analytics', subtitle: 'Throughput, agent load, and cycle time' },
-  emails: { title: 'Emails', subtitle: 'Inbox threads awaiting a response' },
+  onOpenSettings: () => void
 }
 
 export function TopBar({
   view,
   sample = false,
   onOpenPalette,
-  telemetryCount,
-  onExportTelemetry,
-  onImportTelemetry,
-  onExportObservedWork,
+  onOpenSettings,
 }: Props) {
   const meta = VIEW_META[view]
   const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform)
@@ -42,44 +27,7 @@ export function TopBar({
       </div>
 
       <div className="flex max-w-full flex-wrap items-center justify-end gap-2 sm:gap-3">
-        {!sample && <details className="relative">
-          <summary className="cursor-pointer list-none rounded-sm border border-amber-400/40 bg-amber-400/10 px-3 py-1.5 text-[10px] font-mono uppercase tracking-[0.12em] text-amber-300 hover:bg-amber-400/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-300">
-            Compatibility
-          </summary>
-          <div className="absolute right-0 top-full z-50 mt-2 w-[min(22rem,calc(100vw-1.5rem))] rounded-sm border border-chrome-line bg-chrome-raised p-3 text-xs leading-5 text-chrome-mut shadow-xl">
-            <p className="font-medium text-chrome-ink">Current product: FindMnemo</p>
-            <p>Legacy identifiers remain readable: <code>mnemosync</code>, <code>mnemosync://</code>, and existing local storage keys.</p>
-            <p>Supported consumers: FlowSensa, OSSensa, SancusSight, and LocalCFO.</p>
-          </div>
-        </details>}
-
-        {!sample && <button
-          type="button"
-          onClick={onExportObservedWork}
-          title="Download a private, legacy-compatible FindMnemo observed-work JSON file."
-          className="flex items-center gap-2 rounded-sm border border-memory/40 bg-memory/10 px-3 py-1.5 text-[10px] font-mono uppercase tracking-[0.12em] text-memory hover:bg-memory/20"
-        >
-          Export observed work
-        </button>}
-
-        {!sample && <button
-          type="button"
-          onClick={onImportTelemetry}
-          title="Import agent telemetry from a JSONL file."
-          className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-[0.12em] text-memory border border-memory/40 bg-memory/10 hover:bg-memory/20 rounded-sm px-3 py-1.5 transition-colors"
-        >
-          Import
-        </button>}
-
-        {!sample && <button
-          type="button"
-          onClick={onExportTelemetry}
-          title="Export the local activity ledger for FlowSensa or another schema-compatible consumer."
-          className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-[0.12em] text-sync border border-sync/40 bg-sync/10 hover:bg-sync/20 rounded-sm px-3 py-1.5 transition-colors"
-        >
-          Telemetry
-          <span className="text-memory">{telemetryCount}</span>
-        </button>}
+        {!sample && <button type="button" onClick={onOpenSettings} className="rounded-sm border border-chrome-line bg-chrome-raised/60 px-3 py-1.5 text-[10px] font-mono uppercase tracking-[0.12em] text-chrome-mut hover:text-chrome-ink">Data & Privacy</button>}
 
         <button
           type="button"

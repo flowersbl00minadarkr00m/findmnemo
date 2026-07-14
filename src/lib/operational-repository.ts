@@ -1,5 +1,5 @@
 import type { LLMSource, Ticket, TicketStatus } from '../types'
-import type { CredentialCapabilityDto, DestinationDiscoveryDto, DestinationModelCatalogDto, GmailCandidateDto, GmailCheckDto, GmailTicketAssociationDto, OperationalPolicyMigrationPreview, OperationalRoutingPolicy, ProfileReadinessResultDto, ReconciliationRunDto, RoutingDispatchReceiptDto, SourceDescriptor, SourceId } from '../../shared/companion-contract'
+import type { CredentialCapabilityDto, DataCategoryId, DataExportPreviewDto, DataImportPreviewDto, DataPortabilityReceiptDto, DestinationDiscoveryDto, DestinationModelCatalogDto, GmailCandidateDto, GmailCheckDto, GmailTicketAssociationDto, OperationalPolicyMigrationPreview, OperationalRoutingPolicy, ProfileReadinessResultDto, ReconciliationRunDto, RoutingDispatchReceiptDto, SourceDescriptor, SourceId, UsageCapabilityDto, UsageCoverageDto, UsageManualMappingDto, UsageQueryDto, UsageRecordsPageDto, UsageRefreshRunDto, UsageRouteObservationDto, UsageSummaryDto } from '../../shared/companion-contract'
 
 export interface GmailSourceStatus {
   configured?: boolean
@@ -48,6 +48,24 @@ export interface OperationalRepository {
   listRoutingDispatchReceipts?(): Promise<RoutingDispatchReceiptDto[]>
   cancelRoutingDispatch?(receiptId: string): Promise<RoutingDispatchReceiptDto>
   retryRoutingDispatch?(receiptId: string, idempotencyKey: string): Promise<RoutingDispatchReceiptDto>
+  getUsageCapability?(): Promise<UsageCapabilityDto>
+  startUsageRefresh?(input: { since: string; until: string }): Promise<UsageRefreshRunDto>
+  getUsageRefresh?(runId: string): Promise<UsageRefreshRunDto>
+  cancelUsageRefresh?(runId: string): Promise<UsageRefreshRunDto>
+  getUsageSummary?(filters: UsageQueryDto): Promise<UsageSummaryDto>
+  getUsageRecords?(filters: UsageQueryDto, cursor?: string): Promise<UsageRecordsPageDto>
+  getUsageCoverage?(): Promise<{ coverage: UsageCoverageDto | null; bounds: { periodStart: string | null; periodEnd: string | null; lastSuccessfulRefreshAt: string | null; lastSuccessRunId: string | null } }>
+  listUsageMappings?(): Promise<UsageManualMappingDto[]>
+  saveUsageMapping?(mapping: { identityKey: string; clientId: string; providerId: string | null; modelId: string; profileId: string }): Promise<UsageManualMappingDto>
+  removeUsageMapping?(identityKey: string): Promise<boolean>
+  getUsageRouteObservations?(filters: UsageQueryDto): Promise<UsageRouteObservationDto[]>
+  downloadUsageExport?(filters: UsageQueryDto, format: 'json' | 'csv', includeAttribution?: boolean): Promise<void>
+  clearUsageHistory?(): Promise<void>
+  clearUsageMappings?(): Promise<void>
+  getDataExportPreview?(): Promise<DataExportPreviewDto>
+  downloadDataBundle?(categoryIds: DataCategoryId[]): Promise<void>
+  previewDataImport?(bundle: Record<string, unknown>): Promise<DataImportPreviewDto>
+  commitDataImport?(input: { planId: string; categoryIds: DataCategoryId[]; idempotencyKey: string }): Promise<DataPortabilityReceiptDto>
 }
 
 export interface OperationalRepositoryState {

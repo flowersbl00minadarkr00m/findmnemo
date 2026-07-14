@@ -1,0 +1,28 @@
+{
+  "groupBy": "workspace,model",
+  "entries": [
+    {
+      "client": "codex",
+      "mergedClients": null,
+      "workspaceKey": "workspace-secret",
+      "workspaceLabel": "<SANITIZED_PATH>",
+      "model": "openai/gpt-5",
+      "provider": "openrouter",
+      "input": 120,
+      "output": 30,
+      "cacheRead": 20,
+      "cacheWrite": 10,
+      "reasoning": 10,
+      "messageCount": 2,
+      "cost": 0.42,
+      "performance": { "msPer1KTokens": 1000, "totalDurationMs": 190, "timedTokens": 190, "sampleCount": 2, "tokenCoverage": 1 }
+    }
+  ],
+  "totalInput": 120,
+  "totalOutput": 30,
+  "totalCacheRead": 20,
+  "totalCacheWrite": 10,
+  "totalMessages": 2,
+  "totalCost": 0.42,
+  "processingTimeMs": 25
+}

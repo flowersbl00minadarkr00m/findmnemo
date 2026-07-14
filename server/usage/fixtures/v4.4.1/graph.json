@@ -1,0 +1,36 @@
+{
+  "meta": {
+    "generatedAt": "2026-07-12T09:00:00Z",
+    "version": "4.4.1",
+    "dateRange": { "start": "2026-07-12", "end": "2026-07-12" }
+  },
+  "summary": {
+    "totalTokens": 30,
+    "totalCost": 0,
+    "totalDays": 1,
+    "activeDays": 1,
+    "averagePerDay": 30,
+    "maxCostInSingleDay": 0,
+    "clients": ["claude"],
+    "models": ["claude-sonnet-4-5"]
+  },
+  "years": [],
+  "contributions": [
+    {
+      "date": "2026-07-12",
+      "totals": { "tokens": 30, "cost": 0, "messages": 1 },
+      "intensity": 1,
+      "tokenBreakdown": { "input": 20, "output": 10, "cacheRead": 0, "cacheWrite": 0, "reasoning": 0 },
+      "clients": [
+        {
+          "client": "claude",
+          "modelId": "claude-sonnet-4-5",
+          "providerId": "anthropic",
+          "tokens": { "input": 20, "output": 10, "cacheRead": 0, "cacheWrite": 0, "reasoning": 0 },
+          "cost": 0,
+          "messages": 1
+        }
+      ]
+    }
+  ]
+}

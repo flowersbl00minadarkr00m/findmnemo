@@ -10,6 +10,9 @@ import {
   isRoutingClassificationSource,
   type RoutingRequestOverride,
   type SourceId,
+  type UsageQueryDto,
+  type DataCategoryId,
+  isDataCategoryId,
 } from '../../shared/companion-contract.js'
 import { apiFailure, apiSuccess, sendJson } from './http.js'
 import type { PairingService } from '../auth/pairing-service.js'
@@ -25,6 +28,12 @@ import type { DiscoveryService } from '../routing/discovery-service.js'
 import type { PiRoutingAdapter } from '../routing/adapters/pi-rpc-adapter.js'
 import type { DispatchService } from '../routing/dispatch-service.js'
 import type { RoutingIntegrationApi } from '../routing/integration-api.js'
+import type { TokscaleCommandRunner } from '../usage/tokscale-command-runner.js'
+import type { UsageRefreshService } from '../usage/usage-refresh-service.js'
+import type { UsageRepository } from '../usage/usage-repository.js'
+import type { DataPortabilityService } from '../portability/data-portability-service.js'
+import { usageIdentityKey } from '../usage/usage-mapping.js'
+import { serializeUsageCsv, serializeUsageJson } from '../usage/usage-export.js'
 import {
   allowedOrigin,
   applyCors,
@@ -49,6 +58,10 @@ export interface RouteDependencies {
   piRoutingAdapter: PiRoutingAdapter
   dispatchService: DispatchService
   routingIntegrationApi?: RoutingIntegrationApi
+  tokscaleCommandRunner: TokscaleCommandRunner
+  usageRefreshService: UsageRefreshService
+  usageRepository: UsageRepository
+  dataPortabilityService: DataPortabilityService
   gmailServices: GmailServices
   gmailCheckService: GmailCheckService
   reconciliationEngine: ReconciliationEngine
@@ -262,6 +275,166 @@ async function handleApi(
   if (url.pathname === '/api/v1/diagnostics/export' && request.method === 'GET') {
     if (!authorizePrivate(request, response, dependencies)) return
     sendJson(response, 200, apiSuccess(await createDiagnosticExport({ logger: dependencies.logger, databasePath: dependencies.databasePath, companionVersion: dependencies.identity.companionVersion })))
+    return
+  }
+
+  if (url.pathname === '/api/v1/data/export/preview' && request.method === 'GET') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    sendJson(response, 200, apiSuccess(dependencies.dataPortabilityService.previewExport()))
+    return
+  }
+
+  if (url.pathname === '/api/v1/data/export' && request.method === 'POST') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    try {
+      const body = await readJsonBody(request)
+      if (!Array.isArray(body.categoryIds) || !body.categoryIds.every(isDataCategoryId)) throw new Error('PORTABILITY_INVALID_CATEGORIES')
+      const categoryIds = body.categoryIds as DataCategoryId[]
+      const result = dependencies.dataPortabilityService.createBundle(categoryIds)
+      response.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'content-disposition': `attachment; filename="${result.fileName}"`, 'cache-control': 'no-store' })
+      response.end(result.json)
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : 'PORTABILITY_EXPORT_FAILED'
+      sendJson(response, 400, apiFailure({ code: 'INVALID_REQUEST', message, retryable: false }))
+    }
+    return
+  }
+
+  if (url.pathname === '/api/v1/data/import/preview' && request.method === 'POST') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    try {
+      const body = await readJsonBody(request, 10 * 1024 * 1024)
+      sendJson(response, 200, apiSuccess(dependencies.dataPortabilityService.previewImport(body)))
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : 'PORTABILITY_IMPORT_INVALID'
+      sendJson(response, message === 'REQUEST_TOO_LARGE' ? 413 : 400, apiFailure({ code: 'INVALID_REQUEST', message, retryable: false }))
+    }
+    return
+  }
+
+  if (url.pathname === '/api/v1/data/import/commit' && request.method === 'POST') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    try {
+      const body = await readJsonBody(request)
+      if (!Array.isArray(body.categoryIds) || !body.categoryIds.every(isDataCategoryId)) throw new Error('PORTABILITY_INVALID_CATEGORIES')
+      const categoryIds = body.categoryIds as DataCategoryId[]
+      if (typeof body.planId !== 'string' || typeof body.idempotencyKey !== 'string') throw new Error('PORTABILITY_INVALID_COMMIT')
+      sendJson(response, 200, apiSuccess(dependencies.dataPortabilityService.commitImport({ planId: body.planId, categoryIds, idempotencyKey: body.idempotencyKey })))
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : 'PORTABILITY_IMPORT_FAILED'
+      sendJson(response, 400, apiFailure({ code: 'INVALID_REQUEST', message, retryable: false }))
+    }
+    return
+  }
+
+  if (url.pathname === '/api/v1/usage/capability' && request.method === 'GET') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    sendJson(response, 200, apiSuccess(await dependencies.usageRefreshService.capability(AbortSignal.timeout(10_000))))
+    return
+  }
+
+  if (url.pathname === '/api/v1/usage/refreshes' && request.method === 'POST') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    try {
+      const body = await readJsonBody(request)
+      const run = dependencies.usageRefreshService.start({ since: String(body.since ?? ''), until: String(body.until ?? '') })
+      sendJson(response, 202, apiSuccess(run))
+    } catch {
+      sendJson(response, 400, apiFailure({ code: 'INVALID_REQUEST', message: 'Usage refresh dates must be a valid bounded range.', retryable: false }))
+    }
+    return
+  }
+
+  const usageRefreshMatch = url.pathname.match(/^\/api\/v1\/usage\/refreshes\/([^/]+)(?:\/(cancel))?$/)
+  if (usageRefreshMatch && (request.method === 'GET' || (request.method === 'POST' && usageRefreshMatch[2] === 'cancel'))) {
+    if (!authorizePrivate(request, response, dependencies)) return
+    const runId = decodeURIComponent(usageRefreshMatch[1])
+    const run = usageRefreshMatch[2] === 'cancel' ? dependencies.usageRefreshService.cancel(runId) : dependencies.usageRefreshService.get(runId)
+    if (!run) sendJson(response, 404, apiFailure({ code: 'RUN_NOT_FOUND', message: 'Usage refresh was not found.', retryable: false }))
+    else sendJson(response, 200, apiSuccess(run))
+    return
+  }
+
+  if (url.pathname === '/api/v1/usage/summary' && request.method === 'GET') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    sendJson(response, 200, apiSuccess(dependencies.usageRepository.summary(usageQuery(url), dependencies.routingRepository.readPolicy())))
+    return
+  }
+
+  if (url.pathname === '/api/v1/usage/records' && request.method === 'GET') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    const limit = Number(url.searchParams.get('limit') ?? 100)
+    sendJson(response, 200, apiSuccess(dependencies.usageRepository.queryRecords(usageQuery(url), dependencies.routingRepository.readPolicy(), url.searchParams.get('cursor') ?? '0', Number.isInteger(limit) ? limit : 100)))
+    return
+  }
+
+  if (url.pathname === '/api/v1/usage/coverage' && request.method === 'GET') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    sendJson(response, 200, apiSuccess({ coverage: dependencies.usageRepository.latestCoverage(), bounds: dependencies.usageRepository.bounds() }))
+    return
+  }
+
+  if (url.pathname === '/api/v1/usage/mappings' && request.method === 'GET') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    sendJson(response, 200, apiSuccess(dependencies.usageRepository.listManualMappings(dependencies.routingRepository.readPolicy())))
+    return
+  }
+
+  if (url.pathname === '/api/v1/usage/export' && request.method === 'GET') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    const format = url.searchParams.get('format') === 'csv' ? 'csv' : 'json'
+    const snapshot = dependencies.usageRepository.exportSnapshot(usageQuery(url), dependencies.routingRepository.readPolicy(), url.searchParams.get('includeAttribution') === 'true')
+    const body = format === 'csv' ? serializeUsageCsv(snapshot) : serializeUsageJson(snapshot)
+    response.writeHead(200, { 'content-type': format === 'csv' ? 'text/csv; charset=utf-8' : 'application/json; charset=utf-8', 'content-disposition': `attachment; filename="findmnemo-usage.${format}"`, 'cache-control': 'no-store' })
+    response.end(body)
+    return
+  }
+
+  if (url.pathname === '/api/v1/usage/history' && request.method === 'DELETE') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    const body = await readJsonBody(request).catch((): Record<string, unknown> => ({}))
+    if (body.confirmation !== 'clear-usage-history') { sendJson(response, 400, apiFailure({ code: 'INVALID_REQUEST', message: 'Explicit usage-history confirmation is required.', retryable: false })); return }
+    dependencies.usageRepository.clearHistory()
+    dependencies.operationalRepository.appendAudit({ timestamp: dependencies.clock().toISOString(), action: 'usage-history-clear', objectRefs: [], result: 'cleared' })
+    sendJson(response, 200, apiSuccess({ cleared: true, mappingsPreserved: true }))
+    return
+  }
+
+  if (url.pathname === '/api/v1/usage/mappings' && request.method === 'DELETE') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    const body = await readJsonBody(request).catch((): Record<string, unknown> => ({}))
+    if (body.confirmation !== 'clear-usage-mappings') { sendJson(response, 400, apiFailure({ code: 'INVALID_REQUEST', message: 'Explicit mapping confirmation is required.', retryable: false })); return }
+    dependencies.usageRepository.clearMappings()
+    dependencies.operationalRepository.appendAudit({ timestamp: dependencies.clock().toISOString(), action: 'usage-mapping-clear', objectRefs: [], result: 'cleared' })
+    sendJson(response, 200, apiSuccess({ cleared: true }))
+    return
+  }
+
+  const usageMappingMatch = url.pathname.match(/^\/api\/v1\/usage\/mappings\/([^/]+)$/)
+  if (usageMappingMatch && (request.method === 'PUT' || request.method === 'DELETE')) {
+    if (!authorizePrivate(request, response, dependencies)) return
+    try {
+      const identityKey = decodeURIComponent(usageMappingMatch[1])
+      if (request.method === 'DELETE') {
+        sendJson(response, 200, apiSuccess({ removed: dependencies.usageRepository.removeManualMapping(identityKey) }))
+        return
+      }
+      const body = await readJsonBody(request)
+      const identity = { clientId: String(body.clientId ?? ''), providerId: body.providerId === null ? null : String(body.providerId ?? ''), modelId: String(body.modelId ?? '') }
+      if (usageIdentityKey(identity) !== identityKey) throw new Error('USAGE_MAPPING_INVALID')
+      const policy = dependencies.routingRepository.readPolicy()
+      if (!policy) throw new Error('ROUTING_POLICY_NOT_FOUND')
+      sendJson(response, 200, apiSuccess(dependencies.usageRepository.saveManualMapping(identity, String(body.profileId ?? ''), policy, dependencies.clock().toISOString())))
+    } catch {
+      sendJson(response, 400, apiFailure({ code: 'INVALID_REQUEST', message: 'Usage mapping identity or route target is invalid.', retryable: false }))
+    }
+    return
+  }
+
+  if (url.pathname === '/api/v1/usage/route-observations' && request.method === 'GET') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    const policy = dependencies.routingRepository.readPolicy()
+    sendJson(response, 200, apiSuccess(policy ? dependencies.usageRepository.routeObservations(usageQuery(url), policy) : []))
     return
   }
 
@@ -700,6 +873,18 @@ async function handleApi(
     message: 'The requested companion API route does not exist.',
     retryable: false,
   }))
+}
+
+function usageQuery(url: URL): UsageQueryDto {
+  const optional = (key: string) => {
+    const value = url.searchParams.get(key)
+    return value && value.length <= 200 ? value : null
+  }
+  const mapping = optional('mappingState')
+  return {
+    start: optional('start'), end: optional('end'), clientId: optional('clientId'), providerId: optional('providerId'), modelId: optional('modelId'), profileId: optional('profileId'),
+    mappingState: mapping && ['unmapped', 'automatic', 'manual', 'target-missing'].includes(mapping) ? mapping as UsageQueryDto['mappingState'] : null,
+  }
 }
 
 function auditPairing(dependencies: RouteDependencies, action: string, reasonCode: string | undefined, result: string): void {
