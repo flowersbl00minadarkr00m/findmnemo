@@ -66,6 +66,7 @@ export default function App({ operationalRepository }: { operationalRepository: 
   const [routingTicketId, setRoutingTicketId] = useState<string | null>(null)
   const [usageInitialFilters, setUsageInitialFilters] = useState<UsageQueryDto>()
   const [reconciliationRun, setReconciliationRun] = useState<ReconciliationRunDto>()
+  const [reconciliationRuns, setReconciliationRuns] = useState<ReconciliationRunDto[]>([])
   const [reconciliationSources, setReconciliationSources] = useState<SourceDescriptor[]>([])
   const [reconciliationBusy, setReconciliationBusy] = useState(false)
   const [reconciliationError, setReconciliationError] = useState<string>()
@@ -112,6 +113,7 @@ export default function App({ operationalRepository }: { operationalRepository: 
     void Promise.all([operationalRepository.listReconciliationSources(), operationalRepository.listReconciliationRuns()])
       .then(([sources, runs]) => {
         setReconciliationSources(sources)
+        setReconciliationRuns(runs)
         setReconciliationRun(runs[0])
         setLastReconciliationSuccess(runs.find((run) => run.state === 'complete')?.finishedAt)
       })
@@ -299,6 +301,13 @@ export default function App({ operationalRepository }: { operationalRepository: 
       const final = await pollReconciliationRun(operationalRepository, initial, setReconciliationRun)
       recordReconciliationTelemetry(final)
       if (final.state === 'complete') setLastReconciliationSuccess(final.finishedAt)
+      if (operationalRepository.listReconciliationRuns) {
+        const runs = await operationalRepository.listReconciliationRuns()
+        setReconciliationRuns(runs)
+        setReconciliationRun(runs[0] ?? final)
+      } else {
+        setReconciliationRuns((runs) => [final, ...runs.filter((run) => run.id !== final.id)].slice(0, 20))
+      }
       await refreshOperationalTickets()
     } catch (cause) {
       setReconciliationError(cause instanceof Error ? cause.message : 'Reconciliation refresh failed.')
@@ -390,10 +399,11 @@ export default function App({ operationalRepository }: { operationalRepository: 
     gmailCandidates,
     reconciliationSources,
     reconciliationRun,
+    reconciliationRuns,
     ticketState: operationalTicketState,
     gmailTruthState: gmailError ? 'disconnected' : gmailSourceStatus?.lastSuccessAt ? 'current' : 'unverified',
     lastReconciliationSuccessAt: lastReconciliationSuccess,
-  }), [gmailCandidates, gmailError, gmailSourceStatus?.lastSuccessAt, lastReconciliationSuccess, operationalTicketState, reconciliationRun, reconciliationSources, ticketsWithGenerated])
+  }), [gmailCandidates, gmailError, gmailSourceStatus?.lastSuccessAt, lastReconciliationSuccess, operationalTicketState, reconciliationRun, reconciliationRuns, reconciliationSources, ticketsWithGenerated])
   const selectedAttentionItem = attentionProjection.items.find((item) => item.id === selectedAttentionId)
   const selectedAttentionTicket = selectedAttentionItem?.kind === 'ticket'
     ? ticketsWithGenerated.find((ticket) => `ticket:${ticket.id}` === selectedAttentionItem.recordRef)

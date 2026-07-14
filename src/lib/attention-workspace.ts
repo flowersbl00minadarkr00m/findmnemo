@@ -27,6 +27,7 @@ export interface AttentionProjectionInput {
   gmailCandidates?: readonly GmailCandidateDto[]
   reconciliationSources?: readonly SourceDescriptor[]
   reconciliationRun?: ReconciliationRunDto
+  reconciliationRuns?: readonly ReconciliationRunDto[]
   ticketState?: 'loading' | 'current' | 'stale' | 'error'
   gmailTruthState?: AttentionTruthState
   lastReconciliationSuccessAt?: string
@@ -49,8 +50,8 @@ export function projectAttentionWorkspace(input: AttentionProjectionInput): Atte
     if (item) ranked.push(item)
   }
   for (const source of input.reconciliationSources ?? []) {
-    const result = input.reconciliationRun?.sources.find((entry) => entry.sourceId === source.id)
-    const item = projectSource(source, result, input.reconciliationRun, input.fictional === true)
+    const evidence = latestSourceEvidence(input, source.id)
+    const item = projectSource(source, evidence?.result, evidence?.run, input.fictional === true)
     if (item) ranked.push(item)
   }
 
@@ -247,7 +248,7 @@ function projectSource(
   if (!result) {
     return sourceItem(source, recordRef, 3, 'needs-action', 'normal', 'Source has not been checked yet.', truthState, counts, result)
   }
-  if (result.state === 'failed' || result.state === 'unavailable' || run?.state === 'partial' || run?.state === 'failed') {
+  if (result.state === 'failed' || result.state === 'unavailable' || result.unresolved > 0 || result.duplicate > 0) {
     return sourceItem(source, recordRef, 3, 'needs-action', 'high', 'Source coverage is incomplete and needs recovery.', truthState, counts, result)
   }
   if (result.state === 'pending' || result.state === 'checking') {
@@ -297,28 +298,45 @@ function sourceItem(
 
 function projectSourceStatuses(input: AttentionProjectionInput): AttentionSourceStatus[] {
   return (input.reconciliationSources ?? []).map((source) => {
-    const result = input.reconciliationRun?.sources.find((entry) => entry.sourceId === source.id)
-    const truthState = sourceTruth(result, input.reconciliationRun, input.fictional === true)
+    const evidence = latestSourceEvidence(input, source.id)
+    const result = evidence?.result
+    const truthState = sourceTruth(result, evidence?.run, input.fictional === true)
     return {
       id: source.id,
       label: source.label,
+      enabled: source.enabled,
       truthState,
-      detail: !source.enabled ? 'Disabled by configuration.' : result ? sourceCounts(result) : 'Not checked',
-      ...(input.lastReconciliationSuccessAt ? { lastSuccessAt: input.lastReconciliationSuccessAt } : {}),
+      detail: !source.enabled ? 'Optional source — not configured.' : result ? sourceCounts(result) : 'Not checked yet',
+      ...(result?.state === 'checked' && evidence?.run.finishedAt ? { lastSuccessAt: evidence.run.finishedAt } : {}),
     }
   })
 }
 
+function latestSourceEvidence(input: AttentionProjectionInput, sourceId: SourceDescriptor['id']): { run: ReconciliationRunDto; result: ReconciliationSourceResultDto } | undefined {
+  const runs = [
+    ...(input.reconciliationRun ? [input.reconciliationRun] : []),
+    ...(input.reconciliationRuns ?? []),
+  ]
+  const seen = new Set<string>()
+  for (const run of runs) {
+    if (seen.has(run.id)) continue
+    seen.add(run.id)
+    const result = run.sources.find((entry) => entry.sourceId === sourceId)
+    if (result) return { run, result }
+  }
+  return undefined
+}
+
 function sourceTruth(
   result: ReconciliationSourceResultDto | undefined,
-  run: ReconciliationRunDto | undefined,
+  _run: ReconciliationRunDto | undefined,
   fictional: boolean,
 ): AttentionTruthState {
   if (fictional) return 'fictional'
   if (!result) return 'unverified'
-  if (run?.state === 'partial') return 'partial'
-  if (run?.state === 'failed' || result.state === 'failed' || result.state === 'unavailable') return 'disconnected'
-  if (result.state === 'checked' && run?.state === 'complete') return 'current'
+  if (result.state === 'failed' || result.state === 'unavailable') return 'disconnected'
+  if (result.state === 'checked' && (result.unresolved > 0 || result.duplicate > 0)) return 'partial'
+  if (result.state === 'checked') return 'current'
   return 'unverified'
 }
 

@@ -9,7 +9,7 @@ const projection: AttentionWorkspaceProjection = {
   dayStatus: { queued: 2, resolved: 0, progress: 0, label: '0 of 2 decisions resolved' },
   sources: [
     { id: 'gmail-followups', label: 'Gmail follow-ups', truthState: 'partial', detail: '3 checked · 1 unresolved' },
-    { id: 'agent-ledger', label: 'Agent ledger', truthState: 'unverified', detail: 'Not checked' },
+    { id: 'agent-ledger', label: 'Agent ledger', enabled: false, truthState: 'unverified', detail: 'Optional source — not configured.' },
   ],
   items: [
     {
@@ -39,6 +39,10 @@ describe('Operations Desk', () => {
     ])
     expect(screen.getByText('partial')).toBeVisible()
     expect(screen.getByText('unverified')).toBeVisible()
+    expect(screen.getByText('Set up locally when needed')).toBeVisible()
+    const ledgerCard = screen.getByText('Agent ledger').closest('article')
+    expect(ledgerCard).not.toBeNull()
+    expect(within(ledgerCard!).queryByRole('button', { name: /retry source/i })).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /blocked release/i }))
     expect(onSelect).toHaveBeenCalledWith('attention:ticket:blocked')

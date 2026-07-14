@@ -43,8 +43,8 @@ const partialRun: ReconciliationRunDto = {
   startedAt: '2026-07-12T09:30:00.000Z',
   finishedAt: '2026-07-12T09:31:00.000Z',
   sources: [{
-    sourceId: 'gmail-followups', state: 'failed', checked: 3, added: 0, updated: 0,
-    unchanged: 2, excluded: 0, duplicate: 0, unresolved: 1, errorCode: 'SOURCE_CHECK_FAILED',
+    sourceId: 'gmail-followups', state: 'checked', checked: 3, added: 0, updated: 0,
+    unchanged: 2, excluded: 0, duplicate: 0, unresolved: 1,
   }],
   items: [],
 }
@@ -119,6 +119,30 @@ describe('attention workspace projection', () => {
     expect(disconnected.items[0].truthState).toBe('disconnected')
     expect(partial.items[0].truthState).toBe('partial')
     expect(fictional.items[0].truthState).toBe('fictional')
+  })
+
+  it('preserves each source latest result across targeted retries and does not offer recovery for optional unconfigured sources', () => {
+    const ticketSource: SourceDescriptor = { id: 'findmnemo-tickets', label: 'FindMnemo tickets', adapterVersion: '1.0.0', enabled: true, policy: 'auto-create' }
+    const optionalSource: SourceDescriptor = { id: 'project-sdd', label: 'Project / SDD registry', adapterVersion: '1.0.0', enabled: false, policy: 'auto-create' }
+    const priorRun: ReconciliationRunDto = {
+      id: 'run-prior', state: 'partial', requestedSourceIds: ['findmnemo-tickets', 'gmail-followups'],
+      startedAt: '2026-07-12T08:00:00.000Z', finishedAt: '2026-07-12T08:01:00.000Z', items: [],
+      sources: [
+        { sourceId: 'findmnemo-tickets', state: 'checked', checked: 1, added: 0, updated: 0, unchanged: 1, excluded: 0, duplicate: 0, unresolved: 0 },
+        partialRun.sources[0],
+      ],
+    }
+    const result = projectAttentionWorkspace({
+      tickets: [], reconciliationSources: [ticketSource, sources[0], optionalSource], reconciliationRun: partialRun,
+      reconciliationRuns: [partialRun, priorRun], ticketState: 'current', now,
+    })
+
+    expect(result.sources).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'findmnemo-tickets', truthState: 'current', detail: expect.stringContaining('1 checked') }),
+      expect.objectContaining({ id: 'gmail-followups', truthState: 'partial' }),
+      expect.objectContaining({ id: 'project-sdd', enabled: false, truthState: 'unverified', detail: 'Optional source — not configured.' }),
+    ]))
+    expect(result.items.some((item) => item.recordRef === 'source:project-sdd')).toBe(false)
   })
 
   it('does not turn missing blockers into frontier-ready work', () => {

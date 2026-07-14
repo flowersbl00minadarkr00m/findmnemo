@@ -45,7 +45,8 @@ describe('registered project and agent-ledger adapters', () => {
       'fixture:spec:001-feature:task:T1', 'fixture:spec:001-feature:task:T2',
     ]))
     expect(new Set(first.items.map((item) => item.externalId)).size).toBe(first.items.length)
-    expect(second.items.every((item) => item.classification === 'unchanged')).toBe(true)
+    expect(first.items.filter((item) => item.externalId.endsWith(':project')).every((item) => item.classification === 'excluded')).toBe(true)
+    expect(second.items.filter((item) => item.classification !== 'excluded').every((item) => item.classification === 'unchanged')).toBe(true)
   })
 
   it('does not read an agent ledger until it is explicitly registered and enabled', async () => {

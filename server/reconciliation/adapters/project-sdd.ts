@@ -20,15 +20,17 @@ export class ProjectSddAdapter implements LocalSourceAdapter {
     for (const project of projects) {
       const scan = await scanSddProjectRoot(project.canonicalPath)
       if (scan.state === 'missing') throw new Error(`Registered project is unavailable: ${project.id}`)
-      records.push(sourceRecord(`${project.id}:project`, project.name ?? project.id, scan.state, `${project.id}/project`))
+      records.push(sourceRecord(`${project.id}:project`, project.name ?? project.id, scan.state, `${project.id}/project`, false))
       for (const spec of scan.specs) {
         const base = `${project.id}:spec:${spec.specId}`
-        records.push(sourceRecord(base, spec.specTitle ?? spec.specId, spec.rawStatus ?? 'invalid-status', `${project.id}/spec/${spec.specId}`))
-        records.push(sourceRecord(`${base}:gate`, `${spec.specId} gate`, spec.rawStatus ?? 'invalid-status', `${project.id}/spec/${spec.specId}/gate`))
+        const specState = spec.rawStatus ?? 'invalid-status'
+        const active = specState !== 'review:done'
+        records.push(sourceRecord(base, spec.specTitle ?? spec.specId, specState, `${project.id}/spec/${spec.specId}`, active))
+        records.push(sourceRecord(`${base}:gate`, `${spec.specId} gate`, specState, `${project.id}/spec/${spec.specId}/gate`, active))
         const tasksRef = spec.artifactRefs.find((ref) => ref.kind === 'tasks')
         if (tasksRef) {
           const markdown = await readFile(join(project.canonicalPath, tasksRef.path), 'utf8')
-          for (const task of parseTasks(markdown)) records.push(sourceRecord(`${base}:task:${task.id}`, task.title, task.state, `${project.id}/spec/${spec.specId}/task/${task.id}`))
+          for (const task of parseTasks(markdown)) records.push(sourceRecord(`${base}:task:${task.id}`, task.title, task.state, `${project.id}/spec/${spec.specId}/task/${task.id}`, task.state !== 'done'))
         }
       }
     }
@@ -40,11 +42,11 @@ function isProject(value: unknown): value is RegisteredProject {
   return typeof value === 'object' && value !== null && typeof (value as RegisteredProject).id === 'string' && typeof (value as RegisteredProject).canonicalPath === 'string'
 }
 
-function sourceRecord(externalId: string, title: string, state: string, ref: string): SourceRecord {
+function sourceRecord(externalId: string, title: string, state: string, ref: string, eligibleForTicket: boolean): SourceRecord {
   return {
     sourceId: 'project-sdd', externalId, title, state,
     fingerprint: createHash('sha256').update(JSON.stringify([externalId, title, state])).digest('hex'),
-    observedAt: new Date().toISOString(), provenanceRef: `registry://${ref}`, eligibleForTicket: true,
+    observedAt: new Date().toISOString(), provenanceRef: `registry://${ref}`, eligibleForTicket,
   }
 }
 

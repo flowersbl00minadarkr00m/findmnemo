@@ -20,6 +20,7 @@ dist-desktop-renderer
 release-desktop*
 dist-ssr
 outputs
+output
 __pycache__
 *.py[cod]
 *.db

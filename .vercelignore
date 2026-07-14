@@ -4,6 +4,7 @@ dist/
 dist-*/
 release-desktop*/
 outputs/
+output/
 build/
 
 # Desktop-only and development evidence

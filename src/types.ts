@@ -72,6 +72,7 @@ export interface AttentionItem {
 export interface AttentionSourceStatus {
   id: string
   label: string
+  enabled?: boolean
   truthState: AttentionTruthState
   detail: string
   lastSuccessAt?: string

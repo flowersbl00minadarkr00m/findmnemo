@@ -28,7 +28,10 @@ export function SourceHealthStrip({ sources, onRetry }: { sources: readonly Atte
             <span className="font-mono text-[10px] uppercase tracking-[0.08em]">{attentionStateLabel(source.truthState)}</span>
           </div>
           <p className="mt-1 truncate text-[11px] text-mut">{source.detail}</p>
-          {onRetry && source.truthState !== 'current' && source.truthState !== 'fictional' && (
+          {source.enabled === false && (
+            <p className="mt-2 text-[10px] font-mono uppercase tracking-[0.08em] text-mut">Set up locally when needed</p>
+          )}
+          {onRetry && source.enabled !== false && source.truthState !== 'current' && source.truthState !== 'fictional' && (
             <button type="button" onClick={() => onRetry(source.id)} className="mt-2 text-[10px] font-mono uppercase tracking-[0.08em] underline underline-offset-2">
               Retry source
             </button>
