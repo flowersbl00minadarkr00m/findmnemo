@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   COMPANION_PROTOCOL_VERSION,
+  assertAgentActivityBrowserSafe,
   assertCompanionProtocolVersion,
   assertReconciliationRunState,
   assertSourceState,
@@ -21,6 +22,13 @@ describe('companion contract', () => {
     expect(() => assertCompanionProtocolVersion('2.0.0')).toThrow(
       'Unsupported companion protocol version',
     )
+  })
+
+  it('enforces the browser-safe agent activity boundary', () => {
+    expect(() => assertAgentActivityBrowserSafe({ id: 'safe', coverageState: 'partial', gapCount: 1 })).not.toThrow()
+    for (const privateField of ['canonicalPath', 'activityToken', 'hookPayload', 'originAssignmentId', 'transcriptPath', 'retryContent']) {
+      expect(() => assertAgentActivityBrowserSafe({ [privateField]: 'private' })).toThrow('AGENT_ACTIVITY_PRIVATE_FIELD')
+    }
   })
 
   it('rejects unknown source states', () => {

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { NormalizedUsageRecordDto, UsageAttributionRecordDto, UsageCoverageDto, UsageMetricDto } from '../../shared/companion-contract.js'
-import { openFindMnemoDatabase } from '../db/database.js'
+import { DATABASE_SCHEMA_VERSION, openFindMnemoDatabase } from '../db/database.js'
 import { UsageRepository, type CommitUsageSnapshotInput } from './usage-repository.js'
 import type { OperationalRoutingPolicy, UsageQueryDto } from '../../shared/companion-contract.js'
 import { RoutingRepository } from '../routing/routing-repository.js'
@@ -133,7 +133,7 @@ describe('local usage repository', () => {
     legacy.exec("CREATE TABLE app_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL); INSERT INTO app_meta VALUES('schema_version','5'); CREATE TABLE legacy_fixture(id TEXT PRIMARY KEY); INSERT INTO legacy_fixture VALUES('preserved');")
     legacy.close()
     const migrated = await openFindMnemoDatabase({ path })
-    expect(migrated.db.prepare("SELECT value FROM app_meta WHERE key='schema_version'").get()).toEqual({ value: '6' })
+    expect(migrated.db.prepare("SELECT value FROM app_meta WHERE key='schema_version'").get()).toEqual({ value: String(DATABASE_SCHEMA_VERSION) })
     expect(migrated.db.prepare('SELECT id FROM legacy_fixture').get()).toEqual({ id: 'preserved' })
     expect(migrated.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='usage_canonical_records'").get()).toEqual({ name: 'usage_canonical_records' })
     migrated.close()

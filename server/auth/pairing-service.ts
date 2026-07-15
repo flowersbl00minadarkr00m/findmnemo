@@ -6,6 +6,7 @@ const COOLDOWN_MS = 60_000
 const MAX_FAILURES = 5
 
 interface PairingCodeRecord {
+  code: string
   hash: Buffer
   expiresAt: number
   used: boolean
@@ -24,7 +25,9 @@ interface BootstrapRecord {
 
 export type PairingExchangeResult =
   | { ok: true; token: string; expiresAt: string }
-  | { ok: false; code: 'PAIRING_CODE_INVALID' | 'PAIRING_CODE_EXPIRED' | 'PAIRING_RATE_LIMITED' }
+  | { ok: false; code: 'PAIRING_CODE_INVALID' | 'PAIRING_CODE_EXPIRED' | 'PAIRING_CODE_USED' | 'PAIRING_RATE_LIMITED' }
+
+export interface PairingCodeSnapshot { code: string; expiresAt: string }
 
 export type SessionValidationResult =
   | { ok: true; browserNonce: string; expiresAt: string }
@@ -56,10 +59,20 @@ export class PairingService {
 
   issueCode(): string {
     const code = String(randomBytes(4).readUInt32BE() % 100_000_000).padStart(8, '0')
-    this.pairingCode = { hash: digest(code), expiresAt: this.now().getTime() + CODE_TTL_MS, used: false }
+    this.pairingCode = { code, hash: digest(code), expiresAt: this.now().getTime() + CODE_TTL_MS, used: false }
     this.failedAttempts = 0
     this.cooldownUntil = 0
     return code
+  }
+
+  pairingSnapshot(): PairingCodeSnapshot | undefined {
+    if (!this.pairingCode || this.pairingCode.used) return undefined
+    return { code: this.pairingCode.code, expiresAt: new Date(this.pairingCode.expiresAt).toISOString() }
+  }
+
+  refreshPairingCode(): PairingCodeSnapshot {
+    this.issueCode()
+    return this.pairingSnapshot()!
   }
 
   issueLocalBootstrap(): string {
@@ -74,9 +87,11 @@ export class PairingService {
 
   exchangeLocalBootstrap(nonce: string, browserNonce: string): PairingExchangeResult {
     const current = this.now().getTime()
-    if (!this.localBootstrap || this.localBootstrap.used || !matches(this.localBootstrap.hash, digest(nonce))) {
+    if (!this.localBootstrap) {
       return { ok: false, code: 'PAIRING_CODE_INVALID' }
     }
+    if (this.localBootstrap.used) return { ok: false, code: 'PAIRING_CODE_USED' }
+    if (!matches(this.localBootstrap.hash, digest(nonce))) return { ok: false, code: 'PAIRING_CODE_INVALID' }
     if (current >= this.localBootstrap.expiresAt) return { ok: false, code: 'PAIRING_CODE_EXPIRED' }
     if (!/^[A-Za-z0-9_-]{16,128}$/.test(browserNonce)) return { ok: false, code: 'PAIRING_CODE_INVALID' }
 
@@ -90,7 +105,8 @@ export class PairingService {
   exchange(code: string, browserNonce: string): PairingExchangeResult {
     const current = this.now().getTime()
     if (current < this.cooldownUntil) return { ok: false, code: 'PAIRING_RATE_LIMITED' }
-    if (!this.pairingCode || this.pairingCode.used) return this.failAttempt('PAIRING_CODE_INVALID', current)
+    if (!this.pairingCode) return this.failAttempt('PAIRING_CODE_INVALID', current)
+    if (this.pairingCode.used) return { ok: false, code: 'PAIRING_CODE_USED' }
     if (current >= this.pairingCode.expiresAt) return { ok: false, code: 'PAIRING_CODE_EXPIRED' }
     if (!matches(this.pairingCode.hash, digest(code))) return this.failAttempt('PAIRING_CODE_INVALID', current)
     if (!/^[A-Za-z0-9_-]{16,128}$/.test(browserNonce)) return this.failAttempt('PAIRING_CODE_INVALID', current)

@@ -1,0 +1,2 @@
+{"type":"thread.started","thread_id":"fixture"}
+{"type":"item.completed","item":{"id":"item-1","type":"agent_message","text":"Fixture result."}}

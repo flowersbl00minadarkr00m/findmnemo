@@ -19,3 +19,7 @@ Confirming applies only safe additions and returns a qualified receipt. Repeatin
 Advanced contains the current/legacy FindMnemo identity note, observed-work compatibility export, and one-release browser-only legacy activity tools. Browser-local activity is explicitly incomplete and is never included in the default operational bundle. The original browser storage is not silently deleted or rewritten.
 
 Standalone Usage JSON/CSV remains available under **Manage local data**. Gmail disconnect/re-authorization and Usage history/mapping deletion keep their owning feature's existing confirmations and privacy rules.
+
+## Agent activity
+
+Agent activity setup, lifecycle metadata, snapshot limits, protected offline retry, removal, and the exact browser/companion boundary are documented in [Agent activity setup, compatibility, and privacy](agent-activity.md). Prompts, responses, reasoning, transcripts, credentials, raw logs, file contents, task descriptions, and tool inputs/results are excluded from activity storage and exports. Clearing activity history preserves the current assignment, pending gap/review evidence, terminal evidence, tickets, project mappings, and SDD links.

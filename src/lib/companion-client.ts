@@ -3,6 +3,7 @@ import {
   type CompanionApiResponse,
   type CompanionConnectionState,
   type CompanionIdentityDto,
+  type OnboardingSnapshotDto,
   type DestinationDiscoveryDto,
   type DestinationModelCatalogDto,
   type GmailCandidateDto,
@@ -27,6 +28,20 @@ import {
   type DataExportPreviewDto,
   type DataImportPreviewDto,
   type DataPortabilityReceiptDto,
+  type CompletedWorkQueryDto,
+  type CompletedWorkResultDto,
+  type RoutingConnectionSummaryDto,
+  type RoutingConnectionCatalogDto,
+  type OperationalRoutingPolicyV3,
+  type RoutingProfileV3,
+  type ProjectFolderSummaryDto,
+  type AgentActivityIntegrationDto,
+  type AgentActivityAssignmentPageDto,
+  type AgentActivityAssignmentQueryDto,
+  type AgentActivityAssignmentSummaryDto,
+  type AgentActivityAssignmentUpdateDto,
+  type AgentActivityManagementReceiptDto,
+  type AgentActivityProjectReviewDto,
 } from '../../shared/companion-contract'
 import type { GmailSourceStatus } from './operational-repository'
 import type { LegacyMigrationRecord, LegacyMigrationResult } from './operational-repository'
@@ -127,6 +142,10 @@ export async function bootstrapLocalCompanion(nonce = browserNonce()): Promise<C
   return { ...response.data, browserNonce: nonce }
 }
 
+export function hasLocalBootstrapEvidence(): boolean {
+  return Boolean(document.querySelector<HTMLMetaElement>('meta[name="findmnemo-local-bootstrap"]')?.content)
+}
+
 export async function getCompanionStatus(session: CompanionSession): Promise<CompanionStatus> {
   const response = await request<CompanionStatus>('/status', {}, session)
   if (response.error || !response.data) throw new Error(response.error?.code ?? 'SESSION_INVALID')
@@ -153,6 +172,21 @@ export async function listCompanionTickets(session: CompanionSession): Promise<T
   const response = await request<Ticket[]>('/tickets', {}, session)
   if (response.error || !response.data) throw new Error(response.error?.code ?? 'SOURCE_UNAVAILABLE')
   return response.data
+}
+
+export async function queryCompletedWork(session: CompanionSession, query: CompletedWorkQueryDto): Promise<CompletedWorkResultDto> {
+  const parameters = new URLSearchParams({ start: query.startInclusive, end: query.endExclusive, timeZone: query.timeZone, limit: String(query.limit ?? 50) })
+  if (query.cursor) parameters.set('cursor', query.cursor)
+  const response = await request<CompletedWorkResultDto>(`/completed-work?${parameters}`, {}, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'INVALID_REQUEST', response.error?.message)
+  return response.data
+}
+
+export async function exportCompletedWork(session: CompanionSession, query: CompletedWorkQueryDto, format: 'json' | 'csv'): Promise<Blob> {
+  const parameters = new URLSearchParams({ start: query.startInclusive, end: query.endExclusive, timeZone: query.timeZone, format })
+  const response = await fetch(`${COMPANION_BASE_URL}/completed-work/export?${parameters}`, { headers: { authorization: `Bearer ${session.token}`, 'x-findmnemo-browser-nonce': session.browserNonce, 'x-findmnemo-protocol-version': COMPANION_PROTOCOL_VERSION }, redirect: 'error' })
+  if (!response.ok) throw new CompanionApiRequestError('INVALID_REQUEST', 'Completed-work export failed.')
+  return response.blob()
 }
 
 export async function createCompanionTicket(session: CompanionSession, ticket: Ticket): Promise<Ticket> {
@@ -233,6 +267,56 @@ export async function associateGmailCandidate(
 export async function listReconciliationSources(session: CompanionSession): Promise<SourceDescriptor[]> {
   const response = await request<SourceDescriptor[]>('/sources', {}, session)
   if (response.error || !response.data) throw new Error(response.error?.code ?? 'SOURCE_UNAVAILABLE')
+  return response.data
+}
+
+export async function getOnboardingSnapshot(session: CompanionSession): Promise<OnboardingSnapshotDto> {
+  const response = await request<OnboardingSnapshotDto>('/onboarding', {}, session)
+  if (response.error || !response.data) throw new Error(response.error?.code ?? 'SOURCE_UNAVAILABLE')
+  return response.data
+}
+
+export async function listAgentActivityIntegrations(session: CompanionSession): Promise<AgentActivityIntegrationDto[]> {
+  const response = await request<AgentActivityIntegrationDto[]>('/agent-activity/integrations', {}, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'SOURCE_UNAVAILABLE', response.error?.message)
+  return response.data
+}
+
+export async function listAgentActivityAssignments(session: CompanionSession, query: AgentActivityAssignmentQueryDto = {}): Promise<AgentActivityAssignmentPageDto> {
+  const parameters = new URLSearchParams({ scope: query.scope ?? 'active', limit: String(query.limit ?? 25) })
+  if (query.cursor) parameters.set('cursor', query.cursor)
+  const response = await request<AgentActivityAssignmentPageDto>(`/agent-activity?${parameters}`, {}, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'SOURCE_UNAVAILABLE', response.error?.message)
+  return response.data
+}
+
+export async function updateAgentActivityAssignment(session: CompanionSession, assignmentId: string, input: AgentActivityAssignmentUpdateDto): Promise<AgentActivityAssignmentSummaryDto> {
+  const response = await request<AgentActivityAssignmentSummaryDto>(`/agent-activity/assignments/${encodeURIComponent(assignmentId)}`, { method: 'PATCH', body: JSON.stringify(input) }, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'INVALID_REQUEST', response.error?.message)
+  return response.data
+}
+
+export async function manageAgentActivity(session: CompanionSession, integrationId: string, action: 'enable' | 'test' | 'pause' | 'reconnect' | 'remove' | 'snapshot' | 'clear-history', confirmed = false): Promise<AgentActivityManagementReceiptDto> {
+  const response = await request<AgentActivityManagementReceiptDto>(`/agent-activity/integrations/${encodeURIComponent(integrationId)}/${action}`, { method: 'POST', body: JSON.stringify({ confirmed }) }, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'INVALID_REQUEST', response.error?.message)
+  return response.data
+}
+
+export async function listAgentActivityProjectReviews(session: CompanionSession): Promise<AgentActivityProjectReviewDto[]> {
+  const response = await request<AgentActivityProjectReviewDto[]>('/agent-activity/project-reviews', {}, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'SOURCE_UNAVAILABLE', response.error?.message)
+  return response.data
+}
+
+export async function resolveAgentActivityProjectReview(session: CompanionSession, reviewId: string, projectId: string | null, confirmed: boolean): Promise<AgentActivityManagementReceiptDto> {
+  const response = await request<AgentActivityManagementReceiptDto>(`/agent-activity/project-reviews/${encodeURIComponent(reviewId)}`, { method: 'POST', body: JSON.stringify({ projectId, confirmed }) }, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'INVALID_REQUEST', response.error?.message)
+  return response.data
+}
+
+export async function startOnboardingRefresh(session: CompanionSession, sourceIds: SourceId[]): Promise<ReconciliationRunDto> {
+  const response = await request<ReconciliationRunDto>('/onboarding/first-refresh', { method: 'POST', body: JSON.stringify({ sourceIds }) }, session)
+  if (response.error || !response.data) throw new Error(response.error?.code ?? 'SOURCE_CHECK_FAILED')
   return response.data
 }
 
@@ -438,6 +522,84 @@ export async function exportOperationalRoutingPolicyV1(session: CompanionSession
 export async function discoverRoutingDestinations(session: CompanionSession): Promise<DestinationDiscoveryDto> {
   const response = await request<DestinationDiscoveryDto>('/routing/destinations/discover', { method: 'POST', body: '{}' }, session)
   if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'SOURCE_CHECK_FAILED', response.error?.message)
+  return response.data
+}
+
+export async function listRoutingConnections(session: CompanionSession): Promise<RoutingConnectionSummaryDto[]> {
+  const response = await request<RoutingConnectionSummaryDto[]>('/routing/connections', {}, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'ROUTING_DESTINATION_UNAVAILABLE', response.error?.message)
+  return response.data
+}
+
+export async function getOperationalRoutingPolicyV3(session: CompanionSession): Promise<OperationalRoutingPolicyV3 | null> {
+  const response = await request<{ policy: OperationalRoutingPolicyV3 | null }>('/routing/policy-v3', {}, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'ROUTING_POLICY_INVALID', response.error?.message)
+  return response.data.policy
+}
+
+export async function updateOperationalRoutingPolicyV3(session: CompanionSession, policy: OperationalRoutingPolicyV3, expectedPolicyVersion: number | null): Promise<OperationalRoutingPolicyV3> {
+  const response = await request<OperationalRoutingPolicyV3>('/routing/policy-v3', { method: 'PUT', body: JSON.stringify({ policy, expectedPolicyVersion }) }, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'ROUTING_POLICY_INVALID', response.error?.message)
+  return response.data
+}
+
+export async function validateOperationalRoutingProfileV3(session: CompanionSession, profileId: string): Promise<RoutingProfileV3> {
+  const response = await request<RoutingProfileV3>(`/routing/profiles-v3/${encodeURIComponent(profileId)}/validate`, { method: 'POST', body: '{}' }, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'ROUTING_PROFILE_NOT_READY', response.error?.message)
+  return response.data
+}
+
+export async function getRoutingConnectionCatalog(session: CompanionSession, connectionId: string): Promise<RoutingConnectionCatalogDto> {
+  const response = await request<RoutingConnectionCatalogDto>(`/routing/connections/${encodeURIComponent(connectionId)}/catalog`, {}, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'ROUTING_DESTINATION_UNAVAILABLE', response.error?.message)
+  return response.data
+}
+
+export async function listProjectFolderSummaries(session: CompanionSession): Promise<ProjectFolderSummaryDto[]> {
+  const response = await request<ProjectFolderSummaryDto[]>('/project-folders', {}, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'SOURCE_UNAVAILABLE', response.error?.message)
+  return response.data
+}
+
+export async function updateProjectFolderSummary(session: CompanionSession, id: string, input: { label?: string; state?: 'active' | 'paused'; sddEnrichmentEnabled?: boolean }): Promise<ProjectFolderSummaryDto> {
+  const response = await request<ProjectFolderSummaryDto>(`/project-folders/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(input) }, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'INVALID_REQUEST', response.error?.message)
+  return response.data
+}
+
+export async function removeProjectFolderSummary(session: CompanionSession, id: string): Promise<boolean> {
+  const response = await request<{ removed: boolean }>(`/project-folders/${encodeURIComponent(id)}`, { method: 'DELETE' }, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'INVALID_REQUEST', response.error?.message)
+  return response.data.removed
+}
+
+export async function discoverRoutingConnections(session: CompanionSession): Promise<RoutingConnectionSummaryDto[]> {
+  const response = await request<RoutingConnectionSummaryDto[]>('/routing/connections/discover', { method: 'POST', body: '{}' }, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'ROUTING_DESTINATION_UNAVAILABLE', response.error?.message)
+  return response.data
+}
+
+export async function refreshRoutingConnection(session: CompanionSession, connectionId: string): Promise<{ connection: RoutingConnectionSummaryDto; catalog: RoutingConnectionCatalogDto }> {
+  const response = await request<{ connection: RoutingConnectionSummaryDto; catalog: RoutingConnectionCatalogDto }>(`/routing/connections/${encodeURIComponent(connectionId)}/refresh`, { method: 'POST', body: '{}' }, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'ROUTING_DESTINATION_UNAVAILABLE', response.error?.message)
+  return response.data
+}
+
+export async function setRoutingConnectionEnabled(session: CompanionSession, connectionId: string, enabled: boolean): Promise<RoutingConnectionSummaryDto> {
+  const response = await request<RoutingConnectionSummaryDto>(`/routing/connections/${encodeURIComponent(connectionId)}`, { method: 'PATCH', body: JSON.stringify({ enabled }) }, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'ROUTING_DESTINATION_UNAVAILABLE', response.error?.message)
+  return response.data
+}
+
+export async function startOpenRouterConnection(session: CompanionSession): Promise<{ authorizationUrl: string; expiresAt: string }> {
+  const response = await request<{ authorizationUrl: string; expiresAt: string }>('/routing/openrouter/oauth/start', { method: 'POST', body: '{}' }, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'CREDENTIAL_STORE_UNAVAILABLE', response.error?.message)
+  return response.data
+}
+
+export async function getOpenRouterConnectionStatus(session: CompanionSession): Promise<{ state: 'idle' | 'pending' | 'ready' | 'failed' | 'cancelled'; expiresAt: string | null; errorCode: string | null }> {
+  const response = await request<{ state: 'idle' | 'pending' | 'ready' | 'failed' | 'cancelled'; expiresAt: string | null; errorCode: string | null }>('/routing/openrouter/oauth/status', {}, session)
+  if (response.error || !response.data) throw new CompanionApiRequestError(response.error?.code ?? 'CREDENTIAL_STORE_UNAVAILABLE', response.error?.message)
   return response.data
 }
 

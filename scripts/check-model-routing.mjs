@@ -37,6 +37,15 @@ import { routingDecisionToTelemetryEvent } from '../src/lib/model-routing-eviden
 
 const NOW = '2026-07-10T18:00:00.000Z'
 
+const executableUi = readFileSync(new URL('../src/components/routing/ExecutableRoutingSetup.tsx', import.meta.url), 'utf8')
+const dispatchService = readFileSync(new URL('../server/routing/dispatch-service.ts', import.meta.url), 'utf8')
+assert.match(executableUi, /Connect the engines you already use/)
+assert.match(executableUi, /Choose who handles each kind of work/)
+assert.match(executableUi, /raw paths never enter the browser|empty local scratch folder/)
+assert.match(dispatchService, /recursive-dispatch-blocked/)
+assert.match(dispatchService, /NO_READY_EXECUTABLE_ROUTE/)
+assert.doesNotMatch(dispatchService, /shell\s*:\s*true/)
+
 function assertValid(policy, label) {
   const result = validateModelRoutingPolicy(policy)
   assert.equal(result.valid, true, `${label}: ${JSON.stringify(result.issues)}`)

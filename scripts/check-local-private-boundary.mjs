@@ -20,6 +20,11 @@ const RULES = [
   ['routing-prompt-canary', /ROUTING_PROMPT_PRIVATE_CANARY/g],
   ['routing-result-canary', /ROUTING_RESULT_PRIVATE_CANARY/g],
   ['routing-credential-canary', /ROUTING_CREDENTIAL_PRIVATE_CANARY/g],
+  ['routing-pkce-canary', /ROUTING_PKCE_PRIVATE_CANARY/g],
+  ['routing-path-canary', /ROUTING_PATH_PRIVATE_CANARY/g],
+  ['onboarding-pairing-canary', /ONBOARDING_PAIRING_PRIVATE_CANARY/g],
+  ['onboarding-path-canary', /ONBOARDING_PATH_PRIVATE_CANARY/g],
+  ['onboarding-preview-canary', /ONBOARDING_PREVIEW_PRIVATE_CANARY/g],
   ['usage-prompt-canary', /USAGE_PROMPT_PRIVATE_CANARY/g],
   ['usage-response-canary', /USAGE_RESPONSE_PRIVATE_CANARY/g],
   ['usage-account-canary', /USAGE_ACCOUNT_PRIVATE_CANARY/g],
@@ -28,6 +33,7 @@ const RULES = [
   ['usage-session-canary', /USAGE_SESSION_PRIVATE_CANARY/g],
   ['usage-workspace-canary', /USAGE_WORKSPACE_PRIVATE_CANARY/g],
   ['usage-export-canary', /USAGE_EXPORT_PRIVATE_CANARY/g],
+  ['agent-activity-private-canary', /AGENT_ACTIVITY_(?:PROMPT|RESPONSE|TRANSCRIPT|REASONING|CREDENTIAL|PATH|CONFIG|RAW_LOG|RETRY|CROSS_SITE|SAMPLE)_PRIVATE_CANARY/g],
 ]
 
 export function scanText(text) {
@@ -53,10 +59,13 @@ async function main() {
     `{"refresh_${'token'}":"private"}`, `SUPABASE_SERVICE_ROLE_KEY="${'x'.repeat(16)}"`,
     `${'RAW'}_LEDGER_${'PRIVATE_MARKER'}`, `{"sessionToken":"${'x'.repeat(24)}"}`,
     'ROUTING_PROMPT_PRIVATE_CANARY', 'ROUTING_RESULT_PRIVATE_CANARY', 'ROUTING_CREDENTIAL_PRIVATE_CANARY',
+    'ROUTING_PKCE_PRIVATE_CANARY', 'ROUTING_PATH_PRIVATE_CANARY',
+    'ONBOARDING_PAIRING_PRIVATE_CANARY', 'ONBOARDING_PATH_PRIVATE_CANARY', 'ONBOARDING_PREVIEW_PRIVATE_CANARY',
     'USAGE_PROMPT_PRIVATE_CANARY', 'USAGE_RESPONSE_PRIVATE_CANARY', 'USAGE_ACCOUNT_PRIVATE_CANARY',
     'USAGE_RAW_OUTPUT_PRIVATE_CANARY', 'USAGE_PRIVATE_PATH_CANARY',
     'USAGE_SESSION_PRIVATE_CANARY', 'USAGE_WORKSPACE_PRIVATE_CANARY',
     'USAGE_EXPORT_PRIVATE_CANARY',
+    ...['PROMPT', 'RESPONSE', 'TRANSCRIPT', 'REASONING', 'CREDENTIAL', 'PATH', 'CONFIG', 'RAW_LOG', 'RETRY', 'CROSS_SITE', 'SAMPLE'].map((kind) => ['AGENT', 'ACTIVITY', kind, 'PRIVATE', 'CANARY'].join('_')),
   ]
   for (const fixture of forbiddenFixtures) if (scanText(fixture).length !== 1) throw new Error('Privacy scanner self-test failed to reject a forbidden fixture.')
   if (scanText('{"runId":"run-1","count":2,"sourceId":"gmail-followups","result":"partial"}').length) throw new Error('Privacy scanner rejected an approved minimized record.')
@@ -72,6 +81,14 @@ async function main() {
   if (/\b(?:setInterval|cron|scheduler|startupRefresh|backgroundRefresh)\b/.test(usageRefreshService)) throw new Error('Scheduled Tokscale refresh entered the manual-only MVP path.')
   const usageExport = await readFile(path.join(ROOT, 'server', 'usage', 'usage-export.ts'), 'utf8')
   if (!usageExport.includes('assertUsageBoundarySafe') || !usageExport.includes('csvCell')) throw new Error('Usage export must retain boundary validation and spreadsheet neutralization.')
+  const activityIngress = await readFile(path.join(ROOT, 'server', 'agent-activity', 'activity-ingress.ts'), 'utf8')
+  if (!activityIngress.includes('validActivityReporterRequest') || !activityIngress.includes('ACTIVITY_CAPTURE_DISABLED') || activityIngress.includes('access-control-allow-origin')) throw new Error('Agent activity ingress lost its local-only feature-gated boundary.')
+  const activityRetry = await readFile(path.join(ROOT, 'server', 'agent-activity', 'reporter', 'retry-spool.ts'), 'utf8')
+  if (!activityRetry.includes('SecretStore') || !activityRetry.includes('parseAssignmentEventV1') || activityRetry.includes('rawPayload')) throw new Error('Agent activity retry storage must remain sanitized and protected.')
+  const legacyLedger = await readFile(path.join(ROOT, 'server', 'reconciliation', 'adapters', 'agent-ledger.ts'), 'utf8')
+  if (!legacyLedger.includes('Legacy manual agent ledger') || !legacyLedger.includes('enabled: false') || /agent_assignments|agent_assignment_events/.test(legacyLedger)) throw new Error('Legacy ledger must remain disabled, manual, and separate from live assignments.')
+  const companionSource = await readFile(path.join(ROOT, 'server', 'companion.ts'), 'utf8')
+  if (/shared[-_ ]?brain|slate-shared-brain|brain\.py/i.test(companionSource)) throw new Error('Shared brain must never become an automatic companion source.')
 
   const roots = ['src', 'server', 'shared', 'dist', 'dist-companion'].map((entry) => path.join(ROOT, entry))
   const defaultRuntimeRoot = process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'FindMnemo') : undefined

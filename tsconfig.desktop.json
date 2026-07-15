@@ -12,6 +12,6 @@
     "sourceMap": true,
     "types": ["node", "electron"]
   },
-  "include": ["desktop/main.ts", "desktop/preload.cts", "desktop/lifecycle/**/*.ts", "server/**/*.ts", "shared/**/*.ts"],
+  "include": ["desktop/main.ts", "desktop/preload.cts", "desktop/lifecycle/**/*.ts", "desktop/agent-activity/**/*.ts", "server/**/*.ts", "shared/**/*.ts"],
   "exclude": ["**/*.test.ts"]
 }

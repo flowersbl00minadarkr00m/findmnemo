@@ -10,7 +10,7 @@ export interface RoutingOriginInput {
 
 export interface RoutingCompanionTransport {
   recommend(input: RoutingOriginInput): Promise<RoutingPreflightDecision>
-  dispatch(input: RoutingOriginInput & { task: string; idempotencyKey: string; origin: { adapterId: string; correlationId: string; conversationRefHash: string | null }; timeoutMs?: number }): Promise<DispatchResult>
+  dispatch(input: RoutingOriginInput & { task: string; idempotencyKey: string; origin: { adapterId: string; correlationId: string; conversationRefHash: string | null }; timeoutMs?: number; projectFolderId?: string }): Promise<DispatchResult>
   getDispatch(receiptId: string): Promise<RoutingDispatchReceiptDto | null>
   cancelDispatch(receiptId: string): Promise<RoutingDispatchReceiptDto | null>
   acknowledgeDelivery(receiptId: string): Promise<RoutingDispatchReceiptDto>
@@ -21,7 +21,7 @@ export class HttpRoutingCompanionTransport implements RoutingCompanionTransport 
   private readonly baseUrl: string
   constructor(token: string, baseUrl = 'http://127.0.0.1:3210/api/v1/integration/routing') { this.token = token; this.baseUrl = baseUrl }
   recommend(input: RoutingOriginInput) { return this.request<RoutingPreflightDecision>('/recommend', { method: 'POST', body: JSON.stringify(input) }) }
-  dispatch(input: RoutingOriginInput & { task: string; idempotencyKey: string; origin: { adapterId: string; correlationId: string; conversationRefHash: string | null }; timeoutMs?: number }) { return this.request<DispatchResult>('/dispatch', { method: 'POST', body: JSON.stringify(input) }) }
+  dispatch(input: RoutingOriginInput & { task: string; idempotencyKey: string; origin: { adapterId: string; correlationId: string; conversationRefHash: string | null }; timeoutMs?: number; projectFolderId?: string }) { return this.request<DispatchResult>('/dispatch', { method: 'POST', body: JSON.stringify(input) }) }
   getDispatch(receiptId: string) { return this.request<RoutingDispatchReceiptDto | null>(`/dispatches/${encodeURIComponent(receiptId)}`) }
   cancelDispatch(receiptId: string) { return this.request<RoutingDispatchReceiptDto | null>(`/dispatches/${encodeURIComponent(receiptId)}/cancel`, { method: 'POST', body: '{}' }) }
   acknowledgeDelivery(receiptId: string) { return this.request<RoutingDispatchReceiptDto>(`/dispatches/${encodeURIComponent(receiptId)}/delivered`, { method: 'POST', body: '{}' }) }

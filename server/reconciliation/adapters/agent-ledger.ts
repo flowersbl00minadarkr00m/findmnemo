@@ -7,7 +7,7 @@ const MAX_BYTES = 5 * 1024 * 1024
 const MAX_LINES = 10_000
 
 export class AgentLedgerAdapter implements LocalSourceAdapter {
-  readonly descriptor = { id: 'agent-ledger', label: 'Registered agent ledger', adapterVersion: '1.0.0', enabled: false, policy: 'review' } as const
+  readonly descriptor = { id: 'agent-ledger', label: 'Legacy manual agent ledger', adapterVersion: 'legacy-1.0.0', enabled: false, policy: 'review' } as const
   private readonly repository: OperationalRepository
   constructor(repository: OperationalRepository) { this.repository = repository }
 

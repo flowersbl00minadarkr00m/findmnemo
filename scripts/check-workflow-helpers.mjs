@@ -588,6 +588,17 @@ check('AI receipt bridge command shape produces receipt and telemetry dry-run ou
   assert(output.telemetryEvents.length === 1, 'bridge should produce linked telemetry')
 })
 
+check('Completed work uses explicit completion evidence rather than last edit time', async () => {
+  const files = [
+    new URL('../src/components/Analytics.tsx', import.meta.url),
+    new URL('../src/components/CompletedWorkPanel.tsx', import.meta.url),
+    new URL('../src/lib/attention-workspace.ts', import.meta.url),
+  ]
+  const source = (await Promise.all(files.map((file) => fs.readFile(file, 'utf8')))).join('\n')
+  assert(!/status\s*===\s*['"]done['"][\s\S]{0,120}updatedAt|updatedAt[\s\S]{0,120}completed/i.test(source), 'completion calculations must not use updatedAt')
+  assert(source.includes('completedAt'), 'completed-work surfaces must use explicit completedAt evidence')
+})
+
 let failures = 0
 
 for (const { name, fn } of checks) {

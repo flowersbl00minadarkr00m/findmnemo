@@ -2,6 +2,7 @@ import type { DestinationModelCatalogDto, DestinationModelDto, ProfileReadinessR
 import type { AdapterManifest, DestinationAdapter, DestinationExecutionEvent, RoutingProcessRunner } from '../adapter-contract.js'
 import { SpawnedPiRpcSessionFactory, type PiRpcSessionFactory } from '../pi-rpc-client.js'
 import { CommandDetector } from './command-detector.js'
+import { ROUTING_COMPATIBILITY_MANIFESTS } from '../compatibility-manifests.js'
 
 export const PI_ADAPTER_VERSION = '1.0.0'
 export const PI_SUPPORTED_RANGE = '0.x'
@@ -13,6 +14,7 @@ function piManifest(): AdapterManifest {
     testedCapabilities: ['detection', 'catalog', 'validation', 'execution', 'cancellation'], controllability: 'controllable',
     installationGuidance: 'Install Pi from its official package, then run Check again. FindMnemo will not install it for you.',
     authenticationGuidance: 'Pi was found. Sign in or configure providers inside Pi before validating a profile.',
+    qualification: ROUTING_COMPATIBILITY_MANIFESTS['pi-rpc'],
   }
 }
 

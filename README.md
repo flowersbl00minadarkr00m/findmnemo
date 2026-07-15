@@ -4,7 +4,7 @@ FindMnemo is MIT-licensed local-first software. macOS/Linux users can follow the
 
 The hosted interface is available at [findmnemo.vercel.app](https://findmnemo.vercel.app). The previous `mnemosync.vercel.app` address remains a compatibility fallback.
 
-FindMnemo is a local-private operations workspace for tracking work across Pi, Codex, and Claude Cowork. It combines ticket management, SDD progress, Gmail follow-up triage, model-routing preferences, and source reconciliation without treating simulated or stale data as live evidence.
+FindMnemo is a local-private operations workspace for tracking work across Pi, Codex, and Claude Code. It combines ticket management, SDD progress, Gmail follow-up triage, model-routing preferences, privacy-minimized active assignments, and source reconciliation without treating simulated or stale data as live evidence.
 
 ## Workspaces
 
@@ -23,8 +23,8 @@ There is no Demo/Live toggle. The route defines the workspace boundary.
 - SQLite under the OS-conventional FindMnemo data root stores operational tickets, email metadata, configured sources, reconciliation runs, and minimized audit records.
 - Gmail uses Google Desktop OAuth with PKCE and the `gmail.metadata` scope.
 - Refresh credentials are protected with Windows DPAPI `CurrentUser`, macOS Keychain, or Linux Secret Service; access credentials remain in companion memory.
-- MnemoSync reconciles configured sources. It does not assign work to agents or claim a handoff occurred.
-- External Codex, Claude, and Pi sessions need a local bridge or browser automation before their tickets count as live agent-created work.
+- FindMnemo reconciles configured sources. It does not assign work to agents or claim a handoff occurred.
+- Explicitly enabled Codex, Claude Code, and Pi integrations report only allowlisted assignment lifecycle metadata through the installed companion. Unsupported versions remain manual/unobserved; no transcript, prompt, response, reasoning, credential, raw log, path, or file content is captured.
 
 ## Quick Start
 
@@ -38,11 +38,15 @@ npm run start:companion
 
 Open `http://127.0.0.1:3210/app` for the local operational surface. For frontend development, run `npm run dev` in a second shell.
 
-For chat-native model routing, open **Engines** and configure the plain-language Guided view first, then connect the same local MCP server to [Codex](docs/model-routing/codex-setup.md) and/or [Claude Code](docs/model-routing/claude-code-setup.md). Pi is the initial controllable destination; other detected tools remain recommendation-only until separately qualified.
+For chat-native model routing, open **Engines**, choose **Check this computer**, explicitly turn on a checked connection, select an exact model and effort, then assign that route to one kind of work. Qualified destinations are Pi, Codex CLI, Claude Code CLI, loopback Ollama, and locally authorized OpenRouter; each retains its own catalog, authentication, and readiness evidence. Add the local MCP server to [Codex](docs/model-routing/codex-setup.md) and/or [Claude Code](docs/model-routing/claude-code-setup.md) so a task can be dispatched and returned in the originating chat. Detection never enables a connection or sends work.
+
+For privacy-minimized active-work tickets from Codex, Claude Code, and Pi, use the installed companion’s **Data & Privacy → Agent activity** controls and review the exact [Windows compatibility, setup, snapshot, lifecycle, and privacy boundary](docs/agent-activity.md). Detection, manual reporting, snapshots, partial automatic events, and explicit terminal evidence are reported separately; unsupported versions retain a manual fallback.
 
 For local model-usage analytics, open **Metrics**, choose **Model Usage**, and refresh manually. The Windows package includes the exact [qualified Tokscale collector](docs/compatibility/tokscale.md); locked source installs receive the matching platform dependency, so no separate global Tokscale installation is required. FindMnemo normalizes the local result without sending raw logs, prompts, responses, credentials, paths, or readable session/workspace identities to the browser. See the [navigation guide](docs/navigation.md), [model-usage guide](docs/model-usage.md), and [third-party notices](THIRD_PARTY_NOTICES.md).
 
 Use **Data & Privacy** to preview and download companion-owned data or safely add supported records from a FindMnemo bundle. See the [data portability guide](docs/data-privacy.md) for category, import, and privacy boundaries.
+
+On first connection, FindMnemo explains each optional source before reading it. You may connect Gmail, one or several project folders, registered agent activity, or local model usage—or continue with tickets only. Project folders do not need SDD. Folder paths remain in the installed/local process; the browser receives only private IDs, labels, detected type, and freshness. See [source setup](docs/source-onboarding.md).
 
 On this machine, ensure development dependencies are included and `NODE_ENV` is not globally forced to `production` before starting Vite.
 
@@ -80,6 +84,7 @@ npm run check:workflow
 npm run check:routing
 npm run check:local-private
 npm run check:public-release
+npm run check:desktop-boundary
 npm run lint
 npm run build
 npm run build:companion
@@ -89,6 +94,7 @@ npm run companion:doctor
 ## Privacy Boundary
 
 - Gmail MIME bodies, credentials, raw local ledgers, and browser pairing/session tokens are prohibited from logs, diagnostics, telemetry, and hosted storage.
+- Agent activity excludes prompts, responses, reasoning, transcripts, credentials, raw logs, private paths, and file contents; only bounded allowlisted assignment metadata may be retained locally.
 - Gmail candidates retain only approved headers, a bounded snippet, reason codes, timestamps, and a Gmail-open reference.
 - Operational state remains local to the companion. Supabase is used only for separately approved minimized telemetry/receipt workflows.
 - Sample records never migrate into the operational database.

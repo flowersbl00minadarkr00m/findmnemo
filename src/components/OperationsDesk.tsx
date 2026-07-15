@@ -1,4 +1,5 @@
 import type { AttentionAction, AttentionItem, AttentionWorkspaceProjection, HomeView, Ticket } from '../types'
+import type { ReactNode } from 'react'
 import { useNarrowInspector } from '../lib/use-narrow-inspector'
 import { attentionRowId } from '../lib/attention-dom'
 import { AttentionQueue } from './AttentionQueue'
@@ -21,6 +22,8 @@ export function OperationsDesk({
   reconciliationState,
   loading = false,
   error,
+  activeAssignments,
+  onOpenSettings,
 }: {
   projection: AttentionWorkspaceProjection
   selectedId?: string
@@ -36,6 +39,8 @@ export function OperationsDesk({
   reconciliationState?: string
   loading?: boolean
   error?: string
+  activeAssignments?: ReactNode
+  onOpenSettings?: () => void
 }) {
   const narrow = useNarrowInspector()
   const selected = projection.items.find((item) => item.id === selectedId)
@@ -71,7 +76,9 @@ export function OperationsDesk({
         {reconciliationState && <p className="mt-2 text-xs text-mut" role="status">MnemoSync {reconciliationState}</p>}
       </header>
 
-      <SourceHealthStrip sources={projection.sources} onRetry={onRetrySource} />
+      <SourceHealthStrip sources={projection.sources} onRetry={onRetrySource} onOpenSettings={onOpenSettings} />
+
+      {activeAssignments}
 
       {loading && projection.items.length === 0 && (
         <div className="panel rounded-sm p-6 text-sm text-mut" role="status">Loading companion-owned operational evidence…</div>

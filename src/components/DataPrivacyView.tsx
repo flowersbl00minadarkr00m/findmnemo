@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
-import type { DataCategoryId, DataExportPreviewDto, DataImportPreviewDto, DataPortabilityReceiptDto, UsageQueryDto } from '../../shared/companion-contract'
+import type { DataCategoryId, DataExportPreviewDto, DataImportPreviewDto, DataPortabilityReceiptDto, ProjectFolderSummaryDto, UsageQueryDto } from '../../shared/companion-contract'
 import type { OperationalRepository } from '../lib/operational-repository'
 import { downloadTelemetry, importTelemetryJSONL, loadTelemetry } from '../lib/telemetry'
 import type { View } from '../types'
+import type { AgentActivityIntegrationDto } from '../../shared/companion-contract'
+import { AgentActivityControls } from './AgentActivityControls'
 
 const EMPTY_USAGE_FILTERS: UsageQueryDto = { start: null, end: null, clientId: null, providerId: null, modelId: null, profileId: null, mappingState: null }
 const MAX_IMPORT_BYTES = 10 * 1024 * 1024
 
 export function DataPrivacyView({ repository, sample = false, onImported, onNavigate }: { repository?: OperationalRepository; sample?: boolean; onImported?: () => void; onNavigate?: (view: View) => void }) {
+  const [agentActivity, setAgentActivity] = useState<AgentActivityIntegrationDto[]>([])
   const [preview, setPreview] = useState<DataExportPreviewDto>()
   const [selected, setSelected] = useState<DataCategoryId[]>([])
   const [importPreview, setImportPreview] = useState<DataImportPreviewDto>()
@@ -16,6 +19,7 @@ export function DataPrivacyView({ repository, sample = false, onImported, onNavi
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
   const [legacyCount, setLegacyCount] = useState(() => typeof window === 'undefined' ? 0 : loadTelemetry().length)
+  const [folders, setFolders] = useState<ProjectFolderSummaryDto[]>([])
   const fileRef = useRef<HTMLInputElement>(null)
   const receiptRef = useRef<HTMLElement>(null)
 
@@ -31,6 +35,21 @@ export function DataPrivacyView({ repository, sample = false, onImported, onNavi
     }).catch((cause) => active && setError(cause instanceof Error ? cause.message : 'Data preview is unavailable.')).finally(() => active && setBusy(false))
     return () => { active = false }
   }, [repository, sample])
+
+  useEffect(() => { if (!sample) void repository?.listProjectFolders?.().then(setFolders).catch(() => undefined) }, [repository, sample])
+  useEffect(() => { if (!sample) void repository?.listAgentActivityIntegrations?.().then(setAgentActivity).catch(() => undefined) }, [repository, sample])
+
+  const updateFolder = async (folder: ProjectFolderSummaryDto, input: { state?: 'active' | 'paused'; sddEnrichmentEnabled?: boolean }) => {
+    if (!repository?.updateProjectFolder) return
+    try { const updated = await repository.updateProjectFolder(folder.id, input); setFolders((current) => current.map((value) => value.id === folder.id ? updated : value)) }
+    catch (cause) { setError(cause instanceof Error ? cause.message : 'Project folder could not be updated.') }
+  }
+
+  const removeFolder = async (folder: ProjectFolderSummaryDto) => {
+    if (!repository?.removeProjectFolder) return
+    try { if (await repository.removeProjectFolder(folder.id)) setFolders((current) => current.filter((value) => value.id !== folder.id)) }
+    catch (cause) { setError(cause instanceof Error ? cause.message : 'Project folder could not be removed.') }
+  }
 
   useEffect(() => {
     if (receipt) receiptRef.current?.focus()
@@ -88,6 +107,14 @@ export function DataPrivacyView({ repository, sample = false, onImported, onNavi
   }
 
   return <div className="space-y-5">
+    <section className="panel rounded-sm p-5" aria-labelledby="sources-title">
+      <p className="hud-label">What FindMnemo reads</p><h2 id="sources-title" className="mt-2 text-xl font-semibold">Sources and project folders</h2>
+      <p className="mt-1 text-sm text-mut">Sources are optional. Project folders stay on this computer; the browser receives only a label, type, freshness, and private ID.</p>
+      <div className="mt-4 flex flex-wrap gap-2">{onNavigate && <><button type="button" onClick={() => onNavigate('emails')} className="rounded-sm border border-line px-3 py-2 text-sm">Set up Gmail follow-up</button><button type="button" onClick={() => onNavigate('routing')} className="rounded-sm border border-line px-3 py-2 text-sm">Set up AI engines</button><button type="button" onClick={() => onNavigate('usage')} className="rounded-sm border border-line px-3 py-2 text-sm">Refresh model usage</button></>}<button type="button" onClick={() => void repository?.listProjectFolders?.().then(setFolders)} className="rounded-sm border border-sync/50 px-3 py-2 text-sm text-sync">Refresh folder list</button></div>
+      <p className="mt-3 text-xs text-mut">To add one or several folders, open the installed FindMnemo window and choose <strong className="text-ink">Connect project folders</strong>. If you do not use project folders or SDD, you can leave this empty.</p>
+      {folders.length ? <ul className="mt-4 grid gap-3 md:grid-cols-2">{folders.map((folder) => <li key={folder.id} className="rounded-sm border border-line p-3"><div className="flex items-start justify-between gap-2"><div><p className="font-medium text-ink">{folder.label}</p><p className="text-xs text-mut">{folder.detectedKind === 'sdd' ? 'Project with SDD enrichment available' : folder.detectedKind === 'git' ? 'Git project' : folder.detectedKind === 'generic' ? 'General project folder' : 'Folder unavailable'} · {folder.lastSuccessAt ? `checked ${new Date(folder.lastSuccessAt).toLocaleString()}` : 'not checked successfully'}</p></div><span className="text-[10px] font-mono uppercase text-memory">{folder.state}</span></div><div className="mt-3 flex flex-wrap gap-2"><button type="button" onClick={() => void updateFolder(folder, { state: folder.state === 'active' ? 'paused' : 'active' })} className="rounded-sm border border-line px-3 py-2 text-xs">{folder.state === 'active' ? 'Pause' : 'Resume'}</button>{folder.detectedKind === 'sdd' && <button type="button" onClick={() => void updateFolder(folder, { sddEnrichmentEnabled: !folder.sddEnrichmentEnabled })} className="rounded-sm border border-line px-3 py-2 text-xs">{folder.sddEnrichmentEnabled ? 'Turn off SDD details' : 'Use SDD details'}</button>}<button type="button" onClick={() => void removeFolder(folder)} className="rounded-sm border border-alert/40 px-3 py-2 text-xs text-alert">Remove from FindMnemo</button></div></li>)}</ul> : <p className="mt-4 rounded-sm border border-dashed border-line p-4 text-sm text-mut">No project folders are connected. That is a valid setup.</p>}
+    </section>
+    <section className="panel rounded-sm p-5" aria-labelledby="agent-activity-privacy-title"><p className="hud-label">Agent activity</p><h2 id="agent-activity-privacy-title" className="mt-2 text-xl font-semibold">Manage Codex, Claude Code, and Pi tracking</h2><p className="mt-1 text-sm text-mut">Each agent is independent. Detection, support, setup, enablement, freshness, and failures are shown separately. Removing tracking never deletes tickets, folders, files, or SDD work.</p><AgentActivityControls integrations={agentActivity} repository={repository} sample={sample} /></section>
     <section className="panel rounded-sm p-5" aria-labelledby="download-data-title">
       <p className="hud-label">Local operational data</p>
       <h2 id="download-data-title" className="mt-2 text-xl font-semibold">Download my data</h2>

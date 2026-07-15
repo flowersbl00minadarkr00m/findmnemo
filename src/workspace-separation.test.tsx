@@ -80,8 +80,8 @@ describe('workspace route separation', () => {
     render(<WorkspaceRouter />)
 
     expect(screen.getByText('Operational workspace · permission-required')).toBeVisible()
-    expect(screen.getByText('Local network permission required')).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Connect local companion' })).toBeEnabled()
+    expect(screen.getByText('Permission needed to connect this computer')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Connect this computer' })).toBeEnabled()
     expect(screen.queryByText(/tickets in flight/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/FindMnemo Sample Workspace/i)).not.toBeInTheDocument()
   })
@@ -103,6 +103,6 @@ describe('workspace route separation', () => {
 
     expect(screen.getByRole('status')).toHaveTextContent('rollback mode')
     expect(screen.getByText(/local database and Gmail credential remain on this computer/i)).toBeVisible()
-    expect(screen.getByRole('link', { name: 'Open local fallback' })).toHaveAttribute('href', 'http://127.0.0.1:3210/app')
+    expect(screen.getByRole('link', { name: 'Use FindMnemo on this computer' })).toHaveAttribute('href', 'http://127.0.0.1:3210/app')
   })
 })

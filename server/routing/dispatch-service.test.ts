@@ -2,10 +2,14 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { OperationalRoutingPolicy } from '../../shared/companion-contract.js'
+import type { OperationalRoutingPolicy, OperationalRoutingPolicyV3, RoutingConnectionDto, RoutingProfileV3 } from '../../shared/companion-contract.js'
 import { openFindMnemoDatabase } from '../db/database.js'
+import { ProjectFolderRepository } from '../onboarding/project-folder-repository.js'
+import type { AdapterConnectionContext, AdapterManifest, DestinationAdapter, DestinationExecutionEvent } from './adapter-contract.js'
 import { FakeDestinationAdapter } from './adapters/fake-adapter.js'
+import { RoutingConnectionRepository } from './connection-repository.js'
 import { DispatchService } from './dispatch-service.js'
+import { ProjectContextResolver } from './project-context-resolver.js'
 import { RoutingRepository } from './routing-repository.js'
 
 const cleanup: string[] = []
@@ -114,6 +118,75 @@ describe('DispatchService', () => {
     await expect(retryingService.retry(failed.receipt!.id, 'retry-generation')).resolves.toMatchObject({ receipt: { generation: 2, priorReceiptId: failed.receipt!.id } })
     const restarted = new DispatchService(repository, [new FakeDestinationAdapter()], clock)
     await expect(restarted.retry(failed.receipt!.id, 'retry-after-restart')).resolves.toMatchObject({ disposition: 'failed', reasonCode: 'RESULT_CONTENT_UNAVAILABLE' })
+    database.close()
+  })
+})
+
+class FakeConnectionAdapter implements DestinationAdapter {
+  calls = 0
+  readonly manifest: AdapterManifest
+  private readonly adapterId: RoutingConnectionDto['adapterId']
+  private readonly behavior: 'complete' | 'fail'
+  constructor(adapterId: RoutingConnectionDto['adapterId'], behavior: 'complete' | 'fail', evidence: readonly ('provider' | 'model' | 'effort')[] = ['model']) {
+    this.adapterId = adapterId
+    this.behavior = behavior
+    const authMode = adapterId === 'ollama-local' ? 'local-runtime' as const : 'tool-owned' as const
+    this.manifest = { adapterId, displayName: adapterId, executableLabel: adapterId, versionArgs: [], supportedRange: '1.x', testedCapabilities: ['execution'], controllability: 'controllable', installationGuidance: '', authenticationGuidance: '', qualification: { adapterId, support: 'controllable', supportedVersions: '1.x', authMode, catalogMode: 'tested-manifest', actualRouteEvidence: evidence, cancellation: 'abort-request' } }
+  }
+  async detect() { return { adapterId: this.adapterId, displayName: this.adapterId, installation: 'detected' as const, compatibility: 'supported' as const, controllability: 'controllable' as const, readiness: 'unchecked' as const, executableLabel: this.adapterId, installedVersion: '1.0.0', supportedRange: '1.x', testedCapabilities: ['execution'], evidenceAt: clock().toISOString(), reasonCode: null, guidance: '' } }
+  async *executeConnectionProfile(profile: RoutingProfileV3, task: string, context: AdapterConnectionContext): AsyncIterable<DestinationExecutionEvent> {
+    this.calls += 1
+    if (context.dispatchChain?.depth !== 1 || !context.dispatchChain.token) throw new Error('CHAIN_MISSING')
+    if (this.behavior === 'fail') { yield { type: 'failed' as const, code: 'FAKE_FAILURE' }; return }
+    const actualRoute = { destinationAdapterId: this.adapterId, destinationInstanceId: context.connection.id, providerId: profile.providerId, modelId: profile.modelId, effort: profile.effort }
+    yield { type: 'started' as const, actualRoute }
+    yield { type: 'completed' as const, text: `v3:${task}`, actualRoute }
+  }
+}
+
+async function setupV3() {
+  const directory = await mkdtemp(join(tmpdir(), 'findmnemo-dispatch-v3-')); cleanup.push(directory)
+  const database = await openFindMnemoDatabase({ path: join(directory, 'findmnemo.db') })
+  const repository = new RoutingRepository(database.db)
+  const connections = new RoutingConnectionRepository(database.db)
+  const profileReadiness = { state: 'ready' as const, checkedAt: clock().toISOString(), expiresAt: '2026-07-13T22:00:00.000Z', adapterVersion: '1.0.0', installedVersion: '1.0.0', reasonCode: null }
+  const connection = (id: string, adapterId: RoutingConnectionDto['adapterId']): RoutingConnectionDto => ({ id, adapterId, displayName: id, enabled: true, authMode: adapterId === 'ollama-local' ? 'local-runtime' : 'tool-owned', authState: 'ready', installedVersion: '1.0.0', supportedRange: '1.x', readinessCheckedAt: clock().toISOString(), catalogRefreshedAt: clock().toISOString(), config: {}, secretRef: null })
+  const primary = connection('connection:primary', 'codex-cli'); const backup = connection('connection:backup', 'ollama-local')
+  for (const value of [primary, backup]) {
+    connections.save(value)
+    connections.saveCatalog({ connectionId: value.id, adapterId: value.adapterId, adapterVersion: '1.0.0', installedVersion: '1.0.0', checkedAt: clock().toISOString(), expiresAt: '2026-07-13T22:00:00.000Z', source: 'tested-manifest', verification: 'manifest', models: [{ providerId: value.adapterId, modelId: `${value.id}:model`, displayName: value.id, reasoning: false, supportedEfforts: [] }] })
+  }
+  const policy: OperationalRoutingPolicyV3 = { schemaVersion: '3.0.0', policyProfile: 'findmnemo.model-routing.v3', policyVersion: 0, updatedAt: clock().toISOString(), capabilities: [{ id: 'creation.writing', family: 'creation', label: 'Writing', description: 'Draft text', origin: 'built-in' }], profiles: [
+    { id: 'profile:primary', displayName: 'Primary', kind: 'executable', connectionId: primary.id, providerId: 'openai', modelId: `${primary.id}:model`, effort: null, readiness: profileReadiness, enabled: true },
+    { id: 'profile:backup', displayName: 'Backup', kind: 'executable', connectionId: backup.id, providerId: 'ollama', modelId: `${backup.id}:model`, effort: null, readiness: profileReadiness, enabled: true },
+  ], assignments: [{ capabilityId: 'default', profileOrder: ['profile:primary', 'profile:backup'], behavior: 'send-automatically' }, { capabilityId: 'creation.writing', profileOrder: ['profile:primary', 'profile:backup'], behavior: 'send-automatically' }] }
+  repository.compareAndSetPolicyV3(policy, null, connections.list())
+  const contexts = new ProjectContextResolver(new ProjectFolderRepository(database.db), join(directory, 'scratch'))
+  return { database, repository, connections, contexts }
+}
+
+describe('DispatchService v3', () => {
+  it('falls back once, records honest evidence, and returns the result to the origin call', async () => {
+    const { database, repository, connections, contexts } = await setupV3()
+    const primary = new FakeConnectionAdapter('codex-cli', 'fail', [])
+    const backup = new FakeConnectionAdapter('ollama-local', 'complete', ['model'])
+    const service = new DispatchService(repository, [primary, backup], clock, { connections, projectContexts: contexts })
+    const result = await service.dispatch(request('v3-fallback'))
+    expect(result).toMatchObject({ disposition: 'completed', output: 'v3:private task canary', receipt: { state: 'completed' } })
+    expect(primary.calls).toBe(1); expect(backup.calls).toBe(1)
+    expect(repository.getDispatchReceiptV2(result.receipt!.id)).toMatchObject({ fallbackFromProfileIds: ['profile:primary'], requestedRoute: { connectionId: 'connection:primary', verification: 'requested-unverified' }, actualRoute: { connectionId: 'connection:backup', modelId: 'connection:backup:model', providerId: null, verification: 'destination-reported' }, chain: { depth: 0, parentDispatchId: null } })
+    database.close()
+  })
+
+  it('executes an idempotency key once and blocks recursive re-entry', async () => {
+    const { database, repository, connections, contexts } = await setupV3()
+    const primary = new FakeConnectionAdapter('codex-cli', 'complete', [])
+    const service = new DispatchService(repository, [primary], clock, { connections, projectContexts: contexts })
+    const [first, duplicate] = await Promise.all([service.dispatch(request('v3-once')), service.dispatch(request('v3-once'))])
+    expect([first.disposition, duplicate.disposition].sort()).toEqual(['completed', 'existing'])
+    expect(primary.calls).toBe(1)
+    await expect(service.dispatch({ ...request('v3-recursive'), chain: { id: 'chain', depth: 1, parentDispatchId: first.receipt!.id } })).resolves.toMatchObject({ disposition: 'failed', reasonCode: 'recursive-dispatch-blocked' })
+    expect(primary.calls).toBe(1)
     database.close()
   })
 })

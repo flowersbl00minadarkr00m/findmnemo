@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { extname, relative, resolve } from 'node:path'
@@ -7,11 +8,13 @@ import {
   type CompanionIdentityDto,
   type OperationalPolicyMigrationPreview,
   type OperationalRoutingPolicy,
+  type OperationalRoutingPolicyV3,
   isRoutingClassificationSource,
   type RoutingRequestOverride,
   type SourceId,
   type UsageQueryDto,
   type DataCategoryId,
+  type CompletedWorkQueryDto,
   isDataCategoryId,
 } from '../../shared/companion-contract.js'
 import { apiFailure, apiSuccess, sendJson } from './http.js'
@@ -23,6 +26,7 @@ import type { ReconciliationEngine } from '../reconciliation/engine.js'
 import type { SafeLogger } from '../observability/logger.js'
 import type { SourceRunCapabilityReport } from '../../shared/companion-contract.js'
 import { createDiagnosticExport } from '../diagnostics/export.js'
+import type { AgentActivityDiagnosticsService } from '../agent-activity/diagnostics-service.js'
 import type { RoutingRepository } from '../routing/routing-repository.js'
 import type { DiscoveryService } from '../routing/discovery-service.js'
 import type { PiRoutingAdapter } from '../routing/adapters/pi-rpc-adapter.js'
@@ -32,6 +36,15 @@ import type { TokscaleCommandRunner } from '../usage/tokscale-command-runner.js'
 import type { UsageRefreshService } from '../usage/usage-refresh-service.js'
 import type { UsageRepository } from '../usage/usage-repository.js'
 import type { DataPortabilityService } from '../portability/data-portability-service.js'
+import type { ProjectFolderService } from '../onboarding/project-folder-service.js'
+import type { OnboardingService } from '../onboarding/onboarding-service.js'
+import type { TicketLifecycleService } from '../tickets/ticket-lifecycle-service.js'
+import type { CompletedWorkQueryService } from '../tickets/completed-work-query-service.js'
+import type { CompletedWorkExporter } from '../tickets/completed-work-exporter.js'
+import type { RoutingConnectionService } from '../routing/connection-service.js'
+import type { OpenRouterOAuthService } from '../routing/openrouter-oauth-service.js'
+import { validActivityReporterRequest, type ActivityIngress } from '../agent-activity/activity-ingress.js'
+import type { AgentActivityManagementService } from '../agent-activity/management-service.js'
 import { usageIdentityKey } from '../usage/usage-mapping.js'
 import { serializeUsageCsv, serializeUsageJson } from '../usage/usage-export.js'
 import {
@@ -55,6 +68,8 @@ export interface RouteDependencies {
   operationalRepository: OperationalRepository
   routingRepository: RoutingRepository
   discoveryService: DiscoveryService
+  routingConnectionService: RoutingConnectionService
+  openRouterOAuthService?: OpenRouterOAuthService
   piRoutingAdapter: PiRoutingAdapter
   dispatchService: DispatchService
   routingIntegrationApi?: RoutingIntegrationApi
@@ -65,8 +80,16 @@ export interface RouteDependencies {
   gmailServices: GmailServices
   gmailCheckService: GmailCheckService
   reconciliationEngine: ReconciliationEngine
+  onboardingService: OnboardingService
+  projectFolderService: ProjectFolderService
+  ticketLifecycleService: TicketLifecycleService
+  completedWorkQueryService: CompletedWorkQueryService
+  completedWorkExporter: CompletedWorkExporter
   logger: SafeLogger
   capabilityReport: SourceRunCapabilityReport
+  activityIngress?: ActivityIngress
+  activityManagement?: AgentActivityManagementService
+  activityDiagnostics?: AgentActivityDiagnosticsService
 }
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -81,6 +104,12 @@ const CONTENT_TYPES: Record<string, string> = {
 export function createRequestHandler(dependencies: RouteDependencies) {
   return async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1')
+    if (url.pathname.startsWith('/api/v1/integration/agent-activity/')) {
+      if (dependencies.activityIngress && await dependencies.activityIngress.handle(request, response, url)) return
+      const allowed = validActivityReporterRequest(request)
+      sendJson(response, allowed ? 503 : 403, { requestId: randomUUID(), outcome: 'rejected', reasonCode: allowed ? 'ACTIVITY_INGRESS_UNAVAILABLE' : 'ORIGIN_NOT_ALLOWED' })
+      return
+    }
     const startedAt = Date.now()
     response.once('finish', () => {
       void dependencies.logger.write({ level: response.statusCode >= 500 ? 'error' : response.statusCode >= 400 ? 'warn' : 'info', code: response.statusCode >= 500 ? 'HTTP_ERROR' : 'HTTP_REQUEST', route: url.pathname, status: response.statusCode, durationMs: Date.now() - startedAt })
@@ -249,6 +278,7 @@ async function handleApi(
       sources: dependencies.reconciliationEngine.sources(),
       checkedAt: dependencies.clock().toISOString(),
       capabilities: dependencies.capabilityReport,
+      ...(dependencies.activityDiagnostics ? { agentActivity: dependencies.activityDiagnostics.snapshot() } : {}),
     }))
     return
   }
@@ -268,13 +298,104 @@ async function handleApi(
       recovery: ['retry-identity', 'regenerate-pairing-code', 'open-local-fallback', 'run-companion-doctor'],
       checkedAt: dependencies.clock().toISOString(),
       capabilities: dependencies.capabilityReport,
+      ...(dependencies.activityDiagnostics ? { agentActivity: dependencies.activityDiagnostics.snapshot() } : {}),
     }))
     return
   }
 
   if (url.pathname === '/api/v1/diagnostics/export' && request.method === 'GET') {
     if (!authorizePrivate(request, response, dependencies)) return
-    sendJson(response, 200, apiSuccess(await createDiagnosticExport({ logger: dependencies.logger, databasePath: dependencies.databasePath, companionVersion: dependencies.identity.companionVersion })))
+    sendJson(response, 200, apiSuccess(await createDiagnosticExport({ logger: dependencies.logger, databasePath: dependencies.databasePath, companionVersion: dependencies.identity.companionVersion, agentActivity: dependencies.activityDiagnostics })))
+    return
+  }
+
+  if (url.pathname === '/api/v1/agent-activity/integrations' && request.method === 'GET') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    sendJson(response, 200, apiSuccess(await dependencies.activityManagement?.listIntegrations() ?? [])); return
+  }
+  if ((url.pathname === '/api/v1/agent-activity' || url.pathname === '/api/v1/agent-activity/assignments') && request.method === 'GET') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    try {
+      const scopeValue = url.searchParams.get('scope') ?? 'active'
+      if (!['active', 'terminal', 'all'].includes(scopeValue)) throw new Error('INVALID_ASSIGNMENT_SCOPE')
+      const limitValue = url.searchParams.get('limit')
+      const limit = limitValue === null ? undefined : Number(limitValue)
+      const cursor = url.searchParams.get('cursor')
+      sendJson(response, 200, apiSuccess(dependencies.activityManagement?.listAssignments({ scope: scopeValue as 'active' | 'terminal' | 'all', limit, cursor }) ?? { items: [], nextCursor: null, total: 0, scope: scopeValue })); return
+    } catch (cause) {
+      sendJson(response, 400, apiFailure({ code: 'INVALID_REQUEST', message: cause instanceof Error ? cause.message : 'Assignment page request failed.', retryable: false })); return
+    }
+  }
+  const activityAssignmentMatch = url.pathname.match(/^\/api\/v1\/agent-activity\/assignments\/([a-f0-9]{64})$/)
+  if (activityAssignmentMatch && request.method === 'PATCH') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    try {
+      if (!dependencies.activityManagement) throw new Error('ACTIVITY_MANAGEMENT_UNAVAILABLE')
+      const body = await readJsonBody(request)
+      if (Object.keys(body).some((key) => !['expectedVersion', 'safeSummary', 'project', 'sourceUpdatePolicy'].includes(key))) throw new Error('INVALID_ASSIGNMENT_UPDATE')
+      if (!Number.isSafeInteger(body.expectedVersion) || Number(body.expectedVersion) < 1) throw new Error('INVALID_ASSIGNMENT_UPDATE')
+      if (body.safeSummary !== undefined && typeof body.safeSummary !== 'string') throw new Error('INVALID_ASSIGNMENT_UPDATE')
+      if (body.sourceUpdatePolicy !== undefined && !['follow', 'paused', 'detached', 'closed'].includes(String(body.sourceUpdatePolicy))) throw new Error('INVALID_ASSIGNMENT_UPDATE')
+      let project: { kind: 'approved-project'; id: string } | { kind: 'unassigned' } | undefined
+      if (body.project !== undefined) {
+        if (!isRecord(body.project) || Object.keys(body.project).some((key) => !['kind', 'id'].includes(key))) throw new Error('INVALID_ASSIGNMENT_UPDATE')
+        if (body.project.kind === 'unassigned' && body.project.id === undefined) project = { kind: 'unassigned' }
+        else if (body.project.kind === 'approved-project' && typeof body.project.id === 'string') project = { kind: 'approved-project', id: body.project.id }
+        else throw new Error('INVALID_ASSIGNMENT_UPDATE')
+      }
+      const updated = dependencies.activityManagement.updateAssignment(activityAssignmentMatch[1], {
+        expectedVersion: Number(body.expectedVersion),
+        ...(body.safeSummary === undefined ? {} : { safeSummary: body.safeSummary as string }),
+        ...(project ? { project } : {}),
+        ...(body.sourceUpdatePolicy === undefined ? {} : { sourceUpdatePolicy: body.sourceUpdatePolicy as 'follow' | 'paused' | 'detached' | 'closed' }),
+      })
+      sendJson(response, 200, apiSuccess(updated)); return
+    } catch (cause) {
+      const conflict = cause instanceof Error && cause.message === 'RECORD_CHANGED'
+      sendJson(response, conflict ? 409 : 400, apiFailure({ code: conflict ? 'RECORD_CHANGED' : 'INVALID_REQUEST', message: conflict ? 'This assignment changed. Refresh it before saving.' : cause instanceof Error ? cause.message : 'Assignment update failed.', retryable: conflict })); return
+    }
+  }
+  if (url.pathname === '/api/v1/agent-activity/project-candidates' && request.method === 'GET') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    sendJson(response, 200, apiSuccess(await dependencies.activityManagement?.discoverProjectCandidates() ?? { state: 'unavailable', candidates: [], errorCode: 'PROJECT_REGISTRY_UNAVAILABLE' })); return
+  }
+  if (url.pathname === '/api/v1/agent-activity/project-candidates/preview' && request.method === 'POST') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    const body = await readJsonBody(request); const ids = Array.isArray(body.ids) && body.ids.every((id) => typeof id === 'string') ? body.ids as string[] : []
+    sendJson(response, 200, apiSuccess(await dependencies.activityManagement?.previewProjectCandidates(ids) ?? { state: 'unavailable', items: [], confirmationRequired: false, errorCode: 'PROJECT_REGISTRY_UNAVAILABLE' })); return
+  }
+  if (url.pathname === '/api/v1/agent-activity/project-candidates/commit' && request.method === 'POST') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    try { const body = await readJsonBody(request); if (typeof body.previewId !== 'string') throw new Error('INVALID_REQUEST'); sendJson(response, 200, apiSuccess(dependencies.activityManagement?.commitProjectCandidates(body.previewId, body.confirmed === true) ?? { committed: false, folderIds: [], errorCode: 'PROJECT_REGISTRY_UNAVAILABLE' })) }
+    catch (cause) { sendJson(response, 400, apiFailure({ code: 'INVALID_REQUEST', message: cause instanceof Error ? cause.message : 'Project candidate commit failed.', retryable: false })) }
+    return
+  }
+  if (url.pathname === '/api/v1/agent-activity/project-reviews' && request.method === 'GET') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    sendJson(response, 200, apiSuccess(dependencies.activityManagement?.listReviews() ?? [])); return
+  }
+  const activityReviewMatch = url.pathname.match(/^\/api\/v1\/agent-activity\/project-reviews\/([^/]+)$/)
+  if (activityReviewMatch && request.method === 'POST') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    try { const body = await readJsonBody(request); const projectId = body.projectId === null || typeof body.projectId === 'string' ? body.projectId as string | null : null; if (!dependencies.activityManagement) throw new Error('ACTIVITY_MANAGEMENT_UNAVAILABLE'); sendJson(response, 200, apiSuccess(dependencies.activityManagement.resolveReview(decodeURIComponent(activityReviewMatch[1]), projectId, body.confirmed === true))) }
+    catch (cause) { sendJson(response, 400, apiFailure({ code: 'INVALID_REQUEST', message: cause instanceof Error ? cause.message : 'Project review failed.', retryable: false })) }
+    return
+  }
+  const activityManagementMatch = url.pathname.match(/^\/api\/v1\/agent-activity\/integrations\/([^/]+)\/(enable|test|pause|reconnect|remove|snapshot|clear-history)$/)
+  if (activityManagementMatch && request.method === 'POST') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    try {
+      if (!dependencies.activityManagement) throw new Error('ACTIVITY_MANAGEMENT_UNAVAILABLE')
+      const body = await readJsonBody(request); const id = decodeURIComponent(activityManagementMatch[1]); const action = activityManagementMatch[2]; const confirmed = body.confirmed === true
+      const result = action === 'enable' ? await dependencies.activityManagement.enable(id, confirmed)
+        : action === 'test' ? await dependencies.activityManagement.test(id)
+          : action === 'pause' ? await dependencies.activityManagement.pause(id, confirmed)
+            : action === 'reconnect' ? await dependencies.activityManagement.reconnect(id, confirmed)
+              : action === 'remove' ? await dependencies.activityManagement.remove(id, confirmed)
+                : action === 'snapshot' ? await dependencies.activityManagement.snapshot(id)
+                  : dependencies.activityManagement.clearHistory(id, confirmed)
+      sendJson(response, 200, apiSuccess(result))
+    } catch (cause) { sendJson(response, 400, apiFailure({ code: 'INVALID_REQUEST', message: cause instanceof Error ? cause.message : 'Agent activity action failed.', retryable: false })) }
     return
   }
 
@@ -488,6 +609,92 @@ async function handleApi(
     return
   }
 
+  if (url.pathname === '/api/v1/routing/connections' && request.method === 'GET') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    sendJson(response, 200, apiSuccess(dependencies.routingConnectionService.list()))
+    return
+  }
+
+  if (url.pathname === '/api/v1/routing/policy-v3' && request.method === 'GET') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    sendJson(response, 200, apiSuccess({ policy: dependencies.routingConnectionService.policy() }))
+    return
+  }
+
+  if (url.pathname === '/api/v1/routing/policy-v3' && request.method === 'PUT') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    try {
+      const body = await readJsonBody(request)
+      const expectedPolicyVersion = body.expectedPolicyVersion === null ? null : Number(body.expectedPolicyVersion)
+      const saved = dependencies.routingConnectionService.savePolicy(body.policy as OperationalRoutingPolicyV3, expectedPolicyVersion)
+      sendJson(response, 200, apiSuccess(saved))
+    } catch (cause) {
+      const conflict = cause instanceof Error && cause.message === 'ROUTING_POLICY_CONFLICT'
+      sendJson(response, conflict ? 409 : 400, apiFailure({ code: conflict ? 'ROUTING_POLICY_CONFLICT' : 'ROUTING_POLICY_INVALID', message: conflict ? 'The routing setup changed. Reload it before saving.' : 'The routing setup is invalid.', retryable: conflict }))
+    }
+    return
+  }
+
+  const routingProfileV3Match = url.pathname.match(/^\/api\/v1\/routing\/profiles-v3\/([^/]+)\/validate$/)
+  if (routingProfileV3Match && request.method === 'POST') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    try { sendJson(response, 200, apiSuccess(dependencies.routingConnectionService.validateProfile(decodeURIComponent(routingProfileV3Match[1])))) }
+    catch { sendJson(response, 400, apiFailure({ code: 'ROUTING_PROFILE_NOT_FOUND', message: 'Refresh and enable the connection, then check this model again.', retryable: true })) }
+    return
+  }
+
+  if (url.pathname === '/api/v1/routing/openrouter/oauth/start' && request.method === 'POST') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    if (!dependencies.openRouterOAuthService) { sendJson(response, 503, apiFailure({ code: 'CREDENTIAL_STORE_UNAVAILABLE', message: 'The local credential store is unavailable.', retryable: true })); return }
+    sendJson(response, 200, apiSuccess(await dependencies.openRouterOAuthService.begin()))
+    return
+  }
+  if (url.pathname === '/api/v1/routing/openrouter/oauth/status' && request.method === 'GET') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    const status = dependencies.openRouterOAuthService?.status() ?? { state: 'failed' as const, expiresAt: null, errorCode: 'CREDENTIAL_STORE_UNAVAILABLE' }
+    if (status.state === 'ready' && dependencies.openRouterOAuthService?.consumeConnectionChange()) dependencies.routingConnectionService.disconnectAdapter('openrouter')
+    sendJson(response, 200, apiSuccess(status))
+    return
+  }
+  if (url.pathname === '/api/v1/routing/openrouter/oauth/cancel' && request.method === 'POST') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    await dependencies.openRouterOAuthService?.cancel(); sendJson(response, 200, apiSuccess({ cancelled: true })); return
+  }
+  if (url.pathname === '/api/v1/routing/openrouter/connection' && request.method === 'DELETE') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    await dependencies.openRouterOAuthService?.revoke(); dependencies.routingConnectionService.disconnectAdapter('openrouter'); sendJson(response, 200, apiSuccess({ disconnected: true })); return
+  }
+
+  if (url.pathname === '/api/v1/routing/connections/discover' && request.method === 'POST') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    sendJson(response, 200, apiSuccess(await dependencies.routingConnectionService.discover(AbortSignal.timeout(10_000))))
+    return
+  }
+
+  const routingConnectionMatch = url.pathname.match(/^\/api\/v1\/routing\/connections\/([^/]+)(?:\/(refresh|catalog))?$/)
+  if (routingConnectionMatch) {
+    if (!authorizePrivate(request, response, dependencies)) return
+    const connectionId = decodeURIComponent(routingConnectionMatch[1])
+    const action = routingConnectionMatch[2]
+    try {
+      if (action === 'catalog' && request.method === 'GET') {
+        const catalog = dependencies.routingConnectionService.catalog(connectionId)
+        if (!catalog) throw new Error('ROUTING_CATALOG_UNAVAILABLE')
+        sendJson(response, 200, apiSuccess(catalog)); return
+      }
+      if (action === 'refresh' && request.method === 'POST') {
+        sendJson(response, 200, apiSuccess(await dependencies.routingConnectionService.refresh(connectionId, AbortSignal.timeout(15_000)))); return
+      }
+      if (!action && request.method === 'PATCH') {
+        const body = await readJsonBody(request)
+        if (typeof body.enabled !== 'boolean' || Object.keys(body).some((key) => key !== 'enabled')) throw new Error('ROUTING_CONNECTION_INVALID')
+        sendJson(response, 200, apiSuccess(dependencies.routingConnectionService.setEnabled(connectionId, body.enabled))); return
+      }
+    } catch (cause) {
+      sendJson(response, 400, apiFailure({ code: 'ROUTING_DESTINATION_UNAVAILABLE', message: cause instanceof Error && cause.message === 'ROUTING_CONNECTION_NOT_READY' ? 'Validate this connection and its model catalog before enabling it.' : 'This connection could not be checked.', retryable: true })); return
+    }
+  }
+
   if (url.pathname === '/api/v1/routing/destinations/pi-rpc/catalog' && request.method === 'GET') {
     if (!authorizePrivate(request, response, dependencies)) return
     const catalog = dependencies.routingRepository.readCatalog('pi-rpc')
@@ -581,6 +788,56 @@ async function handleApi(
   if (url.pathname === '/api/v1/sources' && request.method === 'GET') {
     if (!authorizePrivate(request, response, dependencies)) return
     sendJson(response, 200, apiSuccess(dependencies.reconciliationEngine.sources()))
+    return
+  }
+
+  if (url.pathname === '/api/v1/onboarding' && request.method === 'GET') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    sendJson(response, 200, apiSuccess(await dependencies.onboardingService.snapshot()))
+    return
+  }
+
+  if (url.pathname === '/api/v1/onboarding/first-refresh' && request.method === 'POST') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    try {
+      const body = await readJsonBody(request)
+      const requested = Array.isArray(body.sourceIds) ? body.sourceIds : []
+      if (!requested.every((sourceId): sourceId is SourceId => typeof sourceId === 'string' && SOURCE_IDS.includes(sourceId as SourceId))) throw new Error('invalid source')
+      sendJson(response, 202, apiSuccess(dependencies.onboardingService.firstRefresh(requested)))
+    } catch {
+      sendJson(response, 400, apiFailure({ code: 'INVALID_REQUEST', message: 'Choose only sources FindMnemo reported as available.', retryable: false }))
+    }
+    return
+  }
+
+  if (url.pathname === '/api/v1/project-folders' && request.method === 'GET') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    sendJson(response, 200, apiSuccess(dependencies.projectFolderService.list()))
+    return
+  }
+
+  const projectFolderMatch = url.pathname.match(/^\/api\/v1\/project-folders\/([^/]+)$/)
+  if (projectFolderMatch && request.method === 'PATCH') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    try {
+      const body = await readJsonBody(request)
+      if ('canonicalPath' in body || 'path' in body) throw new Error('path editing unavailable')
+      const state = body.state === 'active' || body.state === 'paused' ? body.state : undefined
+      const input: { label?: string; state?: 'active' | 'paused'; sddEnrichmentEnabled?: boolean } = {
+        ...(typeof body.label === 'string' ? { label: body.label } : {}),
+        ...(state ? { state } : {}),
+        ...(typeof body.sddEnrichmentEnabled === 'boolean' ? { sddEnrichmentEnabled: body.sddEnrichmentEnabled } : {}),
+      }
+      const updated = dependencies.projectFolderService.update(decodeURIComponent(projectFolderMatch[1]), input)
+      if (!updated) { sendJson(response, 404, apiFailure({ code: 'PROJECT_FOLDER_NOT_FOUND', message: 'Project folder configuration was not found.', retryable: false })); return }
+      sendJson(response, 200, apiSuccess(updated))
+    } catch { sendJson(response, 400, apiFailure({ code: 'INVALID_REQUEST', message: 'Only the folder label, pause state, and optional SDD support can be changed here.', retryable: false })) }
+    return
+  }
+
+  if (projectFolderMatch && request.method === 'DELETE') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    sendJson(response, 200, apiSuccess({ removed: dependencies.projectFolderService.remove(decodeURIComponent(projectFolderMatch[1])), filesystemChanged: false }))
     return
   }
 
@@ -817,6 +1074,28 @@ async function handleApi(
     return
   }
 
+  if (url.pathname === '/api/v1/completed-work' && request.method === 'GET') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    try {
+      sendJson(response, 200, apiSuccess(dependencies.completedWorkQueryService.query(completedWorkQuery(url))))
+    } catch (cause) {
+      sendJson(response, 400, apiFailure({ code: 'INVALID_REQUEST', message: cause instanceof Error && cause.message === 'COMPLETED_CURSOR_INVALID' ? 'This page cursor belongs to a different date range.' : 'The completed-work date range is invalid.', retryable: false }))
+    }
+    return
+  }
+
+  if (url.pathname === '/api/v1/completed-work/export' && request.method === 'GET') {
+    if (!authorizePrivate(request, response, dependencies)) return
+    try {
+      const format = url.searchParams.get('format')
+      if (format !== 'json' && format !== 'csv') throw new Error('COMPLETED_EXPORT_INVALID')
+      const exported = dependencies.completedWorkExporter.export(completedWorkQuery(url), format)
+      response.writeHead(200, { 'content-type': exported.contentType, 'content-disposition': `attachment; filename="${exported.fileName}"`, 'cache-control': 'no-store' })
+      response.end(exported.body)
+    } catch { sendJson(response, 400, apiFailure({ code: 'INVALID_REQUEST', message: 'Completed-work export could not be created for this range.', retryable: false })) }
+    return
+  }
+
   if (url.pathname === '/api/v1/tickets' && request.method === 'POST') {
     if (!authorizePrivate(request, response, dependencies)) return
     try {
@@ -826,8 +1105,8 @@ async function handleApi(
         sendJson(response, 409, apiFailure({ code: 'RECORD_CHANGED', message: 'Ticket already exists.', retryable: false }))
         return
       }
-      dependencies.operationalRepository.saveTicket(ticket)
-      sendJson(response, 201, apiSuccess(ticket.payload))
+      const saved = dependencies.ticketLifecycleService.create(ticket, 'browser-api')
+      sendJson(response, 201, apiSuccess(saved.payload))
     } catch {
       sendJson(response, 400, apiFailure({ code: 'INVALID_REQUEST', message: 'Ticket payload is invalid or contains prohibited private fields.', retryable: false }))
     }
@@ -849,9 +1128,8 @@ async function handleApi(
         sendJson(response, 409, apiFailure({ code: 'RECORD_CHANGED', message: 'Ticket changed; refresh before retrying.', retryable: true }))
         return
       }
-      const nextPayload = { ...current.payload, ...changes, id, updatedAt: dependencies.clock().toISOString() }
-      const ticket = storedTicketFromPayload(nextPayload)
-      dependencies.operationalRepository.saveTicket(ticket)
+      const nextPayload = { ...current.payload, ...changes, id }
+      const ticket = dependencies.ticketLifecycleService.transition({ ticketId: id, expectedUpdatedAt: current.updatedAt, nextPayload, origin: 'browser-api', correlationId: headerString(request, 'idempotency-key') ?? null })
       sendJson(response, 200, apiSuccess(ticket.payload))
     } catch {
       sendJson(response, 400, apiFailure({ code: 'INVALID_REQUEST', message: 'Ticket update is invalid.', retryable: false }))
@@ -884,6 +1162,16 @@ function usageQuery(url: URL): UsageQueryDto {
   return {
     start: optional('start'), end: optional('end'), clientId: optional('clientId'), providerId: optional('providerId'), modelId: optional('modelId'), profileId: optional('profileId'),
     mappingState: mapping && ['unmapped', 'automatic', 'manual', 'target-missing'].includes(mapping) ? mapping as UsageQueryDto['mappingState'] : null,
+  }
+}
+
+function completedWorkQuery(url: URL): CompletedWorkQueryDto {
+  return {
+    startInclusive: url.searchParams.get('start') ?? '',
+    endExclusive: url.searchParams.get('end') ?? '',
+    timeZone: url.searchParams.get('timeZone') ?? '',
+    ...(url.searchParams.get('cursor') ? { cursor: url.searchParams.get('cursor')! } : {}),
+    ...(url.searchParams.get('limit') ? { limit: Number(url.searchParams.get('limit')) } : {}),
   }
 }
 
@@ -938,8 +1226,18 @@ function storedTicketFromPayload(payload: Record<string, unknown>): StoredTicket
     origin: payload.origin as string,
     createdAt: payload.createdAt as string,
     updatedAt: payload.updatedAt as string,
-    payload,
+    completedAt: validatedCompletionAt(payload),
+    payload: { ...payload, completedAt: validatedCompletionAt(payload) },
   }
+}
+
+function validatedCompletionAt(payload: Record<string, unknown>): string | null {
+  if (payload.completedAt === undefined || payload.completedAt === null) return null
+  if (payload.origin !== 'imported' || typeof payload.completionProvenance !== 'string' || !payload.completionProvenance.trim()) return null
+  if (typeof payload.completedAt !== 'string') throw new Error('Invalid completion timestamp')
+  const time = Date.parse(payload.completedAt)
+  if (!Number.isFinite(time) || time > Date.now() + 5 * 60_000) throw new Error('Invalid completion timestamp')
+  return new Date(time).toISOString()
 }
 
 const LEGACY_TICKET_SOURCES = new Set(['Pi', 'Codex', 'Claude Cowork'])

@@ -11,7 +11,19 @@ export interface StoredTicket {
   origin: string
   createdAt: string
   updatedAt: string
+  completedAt?: string | null
   payload: Record<string, unknown>
+}
+
+export interface StoredTicketStatusEvent {
+  id: string
+  ticketId: string
+  fromStatus: string | null
+  toStatus: string
+  occurredAt: string
+  completionAt: string | null
+  origin: string
+  correlationId: string | null
 }
 
 export interface StoredEmailThread {
@@ -69,27 +81,50 @@ export class OperationalRepository {
   }
 
   saveTicket(ticket: StoredTicket): void {
-    this.db.prepare(`INSERT INTO tickets(id,status,source,origin,created_at,updated_at,payload_json)
-      VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,source=excluded.source,
-      origin=excluded.origin,updated_at=excluded.updated_at,payload_json=excluded.payload_json`)
-      .run(ticket.id, ticket.status, ticket.source, ticket.origin, ticket.createdAt, ticket.updatedAt, safeJson(ticket.payload))
+    const completedAt = ticket.completedAt ?? null
+    this.db.prepare(`INSERT INTO tickets(id,status,source,origin,created_at,updated_at,completed_at,payload_json)
+      VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,source=excluded.source,
+      origin=excluded.origin,updated_at=excluded.updated_at,completed_at=excluded.completed_at,payload_json=excluded.payload_json`)
+      .run(ticket.id, ticket.status, ticket.source, ticket.origin, ticket.createdAt, ticket.updatedAt, completedAt, safeJson({ ...ticket.payload, completedAt }))
   }
 
   listTickets(): StoredTicket[] {
-    const rows = this.db.prepare('SELECT id,status,source,origin,created_at,updated_at,payload_json FROM tickets ORDER BY updated_at DESC').all() as Array<Record<string, unknown>>
-    return rows.map((row) => ({
-      id: String(row.id),
-      status: String(row.status),
-      source: String(row.source),
-      origin: String(row.origin),
-      createdAt: String(row.created_at),
-      updatedAt: String(row.updated_at),
-      payload: JSON.parse(String(row.payload_json)) as Record<string, unknown>,
+    const rows = this.db.prepare('SELECT id,status,source,origin,created_at,updated_at,completed_at,payload_json FROM tickets ORDER BY updated_at DESC').all() as Array<Record<string, unknown>>
+    return rows.map(storedTicketFromRow)
+  }
+
+  queryCompletedTickets(input: { startInclusive: string; endExclusive: string; after?: { completedAt: string; id: string }; limit: number }): { records: StoredTicket[]; total: number; unknownCompletionCount: number } {
+    const afterClause = input.after ? 'AND (completed_at < ? OR (completed_at = ? AND id > ?))' : ''
+    const params: Array<string | number> = [input.startInclusive, input.endExclusive]
+    if (input.after) params.push(input.after.completedAt, input.after.completedAt, input.after.id)
+    params.push(input.limit)
+    const rows = this.db.prepare(`SELECT id,status,source,origin,created_at,updated_at,completed_at,payload_json FROM tickets
+      WHERE status='done' AND completed_at>=? AND completed_at<? ${afterClause} ORDER BY completed_at DESC,id ASC LIMIT ?`).all(...params) as Array<Record<string, unknown>>
+    const total = Number((this.db.prepare("SELECT COUNT(*) AS count FROM tickets WHERE status='done' AND completed_at>=? AND completed_at<?").get(input.startInclusive, input.endExclusive) as { count: number }).count)
+    const unknownCompletionCount = Number((this.db.prepare("SELECT COUNT(*) AS count FROM tickets WHERE status='done' AND completed_at IS NULL").get() as { count: number }).count)
+    return {
+      records: rows.map((row) => ({ id: String(row.id), status: String(row.status), source: String(row.source), origin: String(row.origin), createdAt: String(row.created_at), updatedAt: String(row.updated_at), completedAt: String(row.completed_at), payload: { ...(JSON.parse(String(row.payload_json)) as Record<string, unknown>), completedAt: String(row.completed_at) } })),
+      total,
+      unknownCompletionCount,
+    }
+  }
+
+  appendTicketStatusEvent(event: StoredTicketStatusEvent): void {
+    this.db.prepare(`INSERT INTO ticket_status_events(id,ticket_id,from_status,to_status,occurred_at,completion_at,origin,correlation_id)
+      VALUES(?,?,?,?,?,?,?,?)`).run(event.id, event.ticketId, event.fromStatus, event.toStatus, event.occurredAt, event.completionAt, event.origin, event.correlationId)
+  }
+
+  listTicketStatusEvents(ticketId: string): StoredTicketStatusEvent[] {
+    return (this.db.prepare('SELECT * FROM ticket_status_events WHERE ticket_id=? ORDER BY occurred_at,id').all(ticketId) as Array<Record<string, unknown>>).map((row) => ({
+      id: String(row.id), ticketId: String(row.ticket_id), fromStatus: row.from_status ? String(row.from_status) : null,
+      toStatus: String(row.to_status), occurredAt: String(row.occurred_at), completionAt: row.completion_at ? String(row.completion_at) : null,
+      origin: String(row.origin), correlationId: row.correlation_id ? String(row.correlation_id) : null,
     }))
   }
 
   getTicket(id: string): StoredTicket | undefined {
-    return this.listTickets().find((ticket) => ticket.id === id)
+    const row = this.db.prepare('SELECT id,status,source,origin,created_at,updated_at,completed_at,payload_json FROM tickets WHERE id=?').get(id) as Record<string, unknown> | undefined
+    return row ? storedTicketFromRow(row) : undefined
   }
 
   transaction<T>(work: () => T): T {
@@ -351,7 +386,7 @@ export class OperationalRepository {
     return {
       descriptor: {
         id: sourceId,
-        label: { 'findmnemo-tickets': 'FindMnemo tickets', 'gmail-followups': 'Gmail follow-ups', 'project-sdd': 'Project / SDD registry', 'agent-ledger': 'Registered agent ledger' }[sourceId],
+        label: { 'findmnemo-tickets': 'FindMnemo tickets', 'gmail-followups': 'Gmail follow-ups', 'project-sdd': 'Project / SDD registry', 'project-folders': 'Project folders', 'agent-activity': 'Agent activity', 'agent-ledger': 'Legacy manual agent ledger' }[sourceId],
         adapterVersion: String(row.adapter_version),
         enabled: Boolean(row.enabled),
         policy: String(row.policy) as SourceDescriptor['policy'],
@@ -433,6 +468,15 @@ export class OperationalRepository {
     this.db.prepare('INSERT INTO audit_events(id,timestamp,action,reason_code,object_refs_json,result) VALUES(?,?,?,?,?,?)')
       .run(id, event.timestamp, event.action, event.reasonCode ?? null, safeJson(event.objectRefs), event.result)
     return id
+  }
+}
+
+function storedTicketFromRow(row: Record<string, unknown>): StoredTicket {
+  const completedAt = row.completed_at ? String(row.completed_at) : null
+  return {
+    id: String(row.id), status: String(row.status), source: String(row.source), origin: String(row.origin),
+    createdAt: String(row.created_at), updatedAt: String(row.updated_at), completedAt,
+    payload: { ...(JSON.parse(String(row.payload_json)) as Record<string, unknown>), completedAt },
   }
 }
 

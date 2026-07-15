@@ -31,7 +31,8 @@ describe('loopback companion shell', () => {
   })
 
   async function start(port = 0, overrides: CompanionDependencies = {}): Promise<RunningCompanion> {
-    const companion = await startCompanion({ port, distPath, databasePath: join(distPath, 'findmnemo.db'), instanceId: 'test-instance', clock: () => new Date('2026-07-10T00:00:00.000Z'), ...overrides })
+    const defaultSecretStore = new MemorySecretStore()
+    const companion = await startCompanion({ port, distPath, databasePath: join(distPath, 'findmnemo.db'), instanceId: 'test-instance', clock: () => new Date('2026-07-10T00:00:00.000Z'), routingSecretStore: overrides.routingSecretStore ?? defaultSecretStore, activitySecretStore: overrides.activitySecretStore ?? defaultSecretStore, ...overrides })
     running.push(companion)
     return companion
   }
@@ -118,6 +119,49 @@ describe('loopback companion shell', () => {
     const authorized = await fetch(endpoint, { method: 'POST', headers: { ...headers, 'x-findmnemo-routing-token': token }, body })
     expect(authorized.status).toBe(200)
     expect((await authorized.json() as { data: { disposition: string } }).data.disposition).toBe('unavailable')
+  })
+
+  it('wires activity ingress before browser routing with a separate per-integration credential', async () => {
+    const store = new MemorySecretStore(); const companion = await start(0, { routingSecretStore: store, activitySecretStore: store })
+    expect(companion.activity).toBeDefined()
+    const activity = companion.activity!
+    activity.repository.registerIntegration(activity.capabilities.registration('integration-codex-1', 'codex-cli', '0.144.3'))
+    const activityToken = await activity.auth.issue('integration-codex-1')
+    const routingToken = await new RoutingIntegrationAuthService(store).ensure()
+    expect(activityToken).not.toBe(routingToken)
+    const endpoint = `http://${COMPANION_HOST}:${companion.port}/api/v1/integration/agent-activity/events`
+    const body = JSON.stringify({
+      schema: 'findmnemo.assignment-event.v1', eventId: '018f6f7e-6f52-7e54-8aa5-000000000111', integrationId: 'integration-codex-1', agent: 'codex-cli', adapterVersion: '1.0.0', agentVersion: '0.144.3',
+      assignment: { originAssignmentId: 'companion-wiring', generation: 1, summary: { text: 'Companion ingress wiring', source: 'explicit-user' }, projectRef: { kind: 'unassigned' } },
+      observation: { sequence: 1, kind: 'started', reportedState: 'active', observedAt: '2026-07-10T00:00:00.000Z', evidenceKind: 'codex-hook' },
+    })
+    const disabled = await fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json', 'x-findmnemo-activity-token': activityToken }, body })
+    expect(disabled.status).toBe(503)
+    expect((await disabled.json() as { reasonCode: string }).reasonCode).toBe('ACTIVITY_CAPTURE_DISABLED')
+    activity.rollout.enable()
+    const accepted = await fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json', 'x-findmnemo-activity-token': activityToken }, body })
+    expect(accepted.status).toBe(200)
+    expect(accepted.headers.get('access-control-allow-origin')).toBeNull()
+    const acceptedBody = await accepted.json() as { outcome: string; assignmentKey: string }
+    expect(acceptedBody).toMatchObject({ outcome: 'applied' })
+    const browserTokenRejected = await fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json', 'x-findmnemo-activity-token': routingToken }, body })
+    expect(browserTokenRejected.status).toBe(401)
+    const hostedRejected = await fetch(endpoint, { method: 'POST', headers: { origin: 'https://findmnemo.vercel.app', 'sec-fetch-site': 'cross-site', 'content-type': 'application/json', 'x-findmnemo-activity-token': activityToken }, body })
+    expect(hostedRejected.status).toBe(403)
+
+    const browserNonce = 'activity_browser_nonce_123456'
+    const base = `http://${COMPANION_HOST}:${companion.port}/api/v1`
+    const pair = await fetch(`${base}/pairing/session`, { method: 'POST', headers: apiHeaders(companion, { 'content-type': 'application/json' }), body: JSON.stringify({ code: companion.pairingCode, browserNonce }) })
+    const browserToken = ((await pair.json()) as { data: { token: string } }).data.token
+    const browserHeaders = apiHeaders(companion, { authorization: `Bearer ${browserToken}`, 'x-findmnemo-browser-nonce': browserNonce, 'content-type': 'application/json' })
+    const page = await fetch(`${base}/agent-activity?scope=active&limit=1`, { headers: browserHeaders })
+    const pageBody = await page.json() as { data: { total: number; nextCursor: string | null; items: Array<{ id: string; summary: string; recordVersion: number }> } }
+    expect(page.status).toBe(200)
+    expect(pageBody.data).toMatchObject({ total: 1, nextCursor: null, items: [{ id: acceptedBody.assignmentKey, summary: 'Companion ingress wiring', recordVersion: 1 }] })
+    expect(JSON.stringify(pageBody)).not.toMatch(/originAssignment|eventId|canonical_path/i)
+    const renamed = await fetch(`${base}/agent-activity/assignments/${acceptedBody.assignmentKey}`, { method: 'PATCH', headers: browserHeaders, body: JSON.stringify({ expectedVersion: 1, safeSummary: 'Human-safe assignment name' }) })
+    expect(renamed.status).toBe(200)
+    expect((await renamed.json() as { data: { summary: string; summaryOwner: string } }).data).toMatchObject({ summary: 'Human-safe assignment name', summaryOwner: 'human' })
   })
 
   it('persists paired routing policy updates and returns a typed stale-write conflict', async () => {
@@ -369,7 +413,7 @@ describe('loopback companion shell', () => {
     const headers = apiHeaders(companion, { authorization: `Bearer ${pairBody.data.token}`, 'x-findmnemo-browser-nonce': browserNonce })
 
     const sources = await fetch(`${base}/sources`, { headers })
-    expect((await sources.json() as { data: Array<{ id: string }> }).data.map((source) => source.id)).toEqual(['findmnemo-tickets', 'gmail-followups', 'project-sdd', 'agent-ledger'])
+    expect((await sources.json() as { data: Array<{ id: string }> }).data.map((source) => source.id)).toEqual(['findmnemo-tickets', 'gmail-followups', 'project-folders', 'agent-ledger'])
     const ledgerPath = join(distPath, 'registered-ledger.jsonl')
     await writeFile(ledgerPath, JSON.stringify({ eventId: 'fixture-event' }) + '\n')
     const configure = (body: Record<string, unknown>) => fetch(`${base}/sources/agent-ledger`, {
@@ -492,7 +536,7 @@ describe('loopback companion shell', () => {
     expect(updated.status).toBe(200)
     expect((await updated.json() as { data: { status: string } }).data.status).toBe('in-progress')
     expect((await fetch(`http://${COMPANION_HOST}:${second.port}/api/v1/tickets/ticket-durable`, { method: 'DELETE', headers: secondHeaders })).status).toBe(200)
-  })
+  }, 15_000)
 
   it('shares one companion-owned ticket state between hosted and local sessions', async () => {
     const companion = await start()

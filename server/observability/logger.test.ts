@@ -27,6 +27,8 @@ describe('privacy-safe companion logging', () => {
     expect(preview).toEqual([expect.objectContaining({ route: '/api/v1/email/candidates/:threadId/decision', status: 409 })])
     expect(JSON.stringify(preview)).not.toMatch(/private-thread-id|private@example|private body|C:\\private|token=/)
     expect(redactRoute('/api/v1/tickets/private-ticket')).toBe('/api/v1/tickets/:ticketId')
+    expect(redactRoute('/api/v1/agent-activity/assignments/private-assignment')).toBe('/api/v1/agent-activity/assignments/:assignmentKey')
+    expect(redactRoute('/api/v1/agent-activity/integrations/private-integration/remove')).toBe('/api/v1/agent-activity/integrations/:integrationId/:action')
     expect(redactRoute('/api/v1/unknown/private')).toBe('/api/v1/:unrecognized')
   })
 
@@ -59,5 +61,18 @@ describe('privacy-safe companion logging', () => {
     })))
 
     expect(await logger.preview(100)).toHaveLength(40)
+  })
+
+  it('keeps activity metrics allowlisted and drops summaries, identifiers, paths, tokens, and retry contents', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'findmnemo-activity-log-')); cleanup.push(directory)
+    const logger = new SafeLogger(join(directory, 'companion.log'))
+    await logger.write({
+      level: 'info', code: 'ACTIVITY_INGRESS_ACCEPTED', sourceId: 'agent-activity', status: 200, durationMs: 7,
+      agentKind: 'codex-cli', adapterVersion: '1.0.0', activityOutcome: 'applied', reasonCode: 'SEQUENCE_GAP',
+      summary: ['AGENT', 'ACTIVITY', 'PROMPT', 'PRIVATE', 'CANARY'].join('_'), assignmentKey: 'private-assignment', retry: ['AGENT', 'ACTIVITY', 'RETRY', 'PRIVATE', 'CANARY'].join('_'), localPath: 'C:\\private', token: 'private',
+    } as never)
+    const preview = await logger.preview()
+    expect(preview).toEqual([expect.objectContaining({ agentKind: 'codex-cli', adapterVersion: '1.0.0', activityOutcome: 'applied', reasonCode: 'SEQUENCE_GAP', durationMs: 7 })])
+    expect(JSON.stringify(preview)).not.toMatch(/PRIVATE_CANARY|private-assignment|C:\\private|token/i)
   })
 })

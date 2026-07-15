@@ -1,4 +1,21 @@
-import type { DestinationDetectionDto, RoutingExecutionProfile } from '../../shared/companion-contract.js'
+import type { DestinationDetectionDto, RoutingConnectionDto, RoutingExecutionProfile, RoutingProfileV3 } from '../../shared/companion-contract.js'
+
+export interface AdapterQualificationManifest {
+  adapterId: RoutingConnectionDto['adapterId']
+  support: 'controllable' | 'detection-only'
+  supportedVersions: string
+  authMode: RoutingConnectionDto['authMode']
+  catalogMode: 'live-rpc' | 'live-http' | 'installed-local' | 'tested-manifest'
+  actualRouteEvidence: readonly ('model' | 'provider' | 'effort')[]
+  cancellation: 'abort-request' | 'process-tree' | 'both'
+}
+
+export interface AdapterConnectionContext {
+  connection: RoutingConnectionDto
+  projectContext?: { kind: 'project' | 'scratch'; opaqueId: string; localPath: string }
+  dispatchChain?: { id: string; depth: number; token: string }
+}
+export interface AdapterAuthEvidence { state: RoutingConnectionDto['authState']; reasonCode: string | null }
 
 export interface AdapterManifest {
   adapterId: string
@@ -10,6 +27,7 @@ export interface AdapterManifest {
   controllability: 'controllable' | 'detection-only'
   installationGuidance: string
   authenticationGuidance: string
+  qualification?: AdapterQualificationManifest
 }
 
 export interface ProcessRunRequest {
@@ -18,6 +36,9 @@ export interface ProcessRunRequest {
   timeoutMs: number
   maxOutputBytes: number
   signal: AbortSignal
+  cwd?: string
+  env?: NodeJS.ProcessEnv
+  stdin?: string
 }
 
 export type ProcessRunResult =
@@ -35,6 +56,10 @@ export interface DestinationAdapter {
   validate?(profile: RoutingExecutionProfile, signal: AbortSignal): Promise<unknown>
   execute?(profile: RoutingExecutionProfile, task: string, signal: AbortSignal): AsyncIterable<DestinationExecutionEvent>
   cancel?(dispatchId: string): Promise<void>
+  checkAuthentication?(context: AdapterConnectionContext, signal: AbortSignal): Promise<AdapterAuthEvidence>
+  listConnectionModels?(context: AdapterConnectionContext, signal: AbortSignal): Promise<unknown>
+  validateConnectionProfile?(profile: RoutingProfileV3, context: AdapterConnectionContext, signal: AbortSignal): Promise<unknown>
+  executeConnectionProfile?(profile: RoutingProfileV3, task: string, context: AdapterConnectionContext, signal: AbortSignal): AsyncIterable<DestinationExecutionEvent>
 }
 
 export type DestinationExecutionEvent =

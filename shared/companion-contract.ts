@@ -16,6 +16,8 @@ export const SOURCE_IDS = [
   'findmnemo-tickets',
   'gmail-followups',
   'project-sdd',
+  'project-folders',
+  'agent-activity',
   'agent-ledger',
 ] as const
 
@@ -56,12 +58,14 @@ export const COMPANION_ERROR_CODES = [
   'PAIRING_REQUIRED',
   'PAIRING_CODE_INVALID',
   'PAIRING_CODE_EXPIRED',
+  'PAIRING_CODE_USED',
   'PAIRING_RATE_LIMITED',
   'SESSION_INVALID',
   'SESSION_EXPIRED',
   'RECORD_CHANGED',
   'SOURCE_UNAVAILABLE',
   'SOURCE_CHECK_FAILED',
+  'PROJECT_FOLDER_NOT_FOUND',
   'RUN_NOT_FOUND',
   'COMPANION_STOPPED',
   'IDENTITY_MISMATCH',
@@ -100,6 +104,24 @@ export const COMPANION_ERROR_CODES = [
 export type CompanionProtocolVersion = typeof COMPANION_PROTOCOL_VERSION
 export type CompanionConnectionState = (typeof COMPANION_CONNECTION_STATES)[number]
 export type SourceId = (typeof SOURCE_IDS)[number]
+
+export interface ProjectFolderSummaryDto {
+  id: string
+  label: string
+  state: 'active' | 'paused'
+  detectedKind: 'sdd' | 'git' | 'generic' | 'unavailable'
+  sddEnrichmentEnabled: boolean
+  lastCheckedAt: string | null
+  lastSuccessAt: string | null
+  errorCode: 'FOLDER_UNAVAILABLE' | null
+}
+
+export type CompletedRangePreset = '7d' | '30d' | '90d' | '12mo'
+export type CompletedRangeIntentDto = { kind: 'preset'; value: CompletedRangePreset } | { kind: 'custom'; startDate: string; endDate: string; timeZone: string }
+export interface CompletedWorkQueryDto { startInclusive: string; endExclusive: string; timeZone: string; cursor?: string; limit?: number }
+export interface CompletedWorkQuerySnapshotDto { startInclusive: string; endExclusive: string; timeZone: string; limit: number; queryId: string }
+export interface CompletedTicketSummaryDto { id: string; title: string; source: string; projectLabel: string | null; completedAt: string; status: 'done' }
+export interface CompletedWorkResultDto { query: CompletedWorkQuerySnapshotDto; records: CompletedTicketSummaryDto[]; total: number; unknownCompletionCount: number; nextCursor: string | null; generatedAt: string }
 export type SourcePolicy = (typeof SOURCE_POLICIES)[number]
 export type SourceState = (typeof SOURCE_STATES)[number]
 export type ReconciliationRunState = (typeof RECONCILIATION_RUN_STATES)[number]
@@ -159,6 +181,131 @@ export interface SourceDescriptor {
   enabled: boolean
   policy: SourcePolicy
   locationLabel?: string
+}
+
+export type OnboardingSourceState = 'connected' | 'available' | 'needs-setup' | 'unavailable'
+export const AGENT_ACTIVITY_COVERAGE_STATES = ['connected', 'empty', 'partial', 'stale', 'unavailable', 'unsupported'] as const
+export type AgentActivityCoverageState = (typeof AGENT_ACTIVITY_COVERAGE_STATES)[number]
+export type AgentActivityAgentId = 'codex-cli' | 'claude-code' | 'pi'
+export type AgentActivityAgentAuthState = 'authenticated' | 'signed-out' | 'unknown' | 'unavailable' | 'not-applicable'
+export type AgentActivityIntegrationAuthState = 'ready' | 'missing' | 'unavailable' | 'not-configured'
+export type AgentActivityTrustState = 'trusted' | 'untrusted' | 'unknown' | 'unavailable' | 'not-applicable'
+export type AgentActivityPrimaryAction = 'enable' | 'test' | 'reconnect' | 'resume' | 'review-gap' | 'manual-report' | 'sign-in' | 'check-status'
+
+export interface AgentActivityCapabilityDto {
+  detection: boolean
+  manual: boolean
+  snapshot: 'none' | 'next-interaction' | 'current-session'
+  automaticEvents: 'none' | 'partial'
+  automaticTerminal: 'none' | 'task-only'
+}
+
+export interface AgentActivityIntegrationDto {
+  id: string
+  agent: AgentActivityAgentId
+  label: string
+  installedVersion: string | null
+  supported: boolean
+  configured: boolean
+  enabled: boolean
+  agentAuthState: AgentActivityAgentAuthState
+  integrationAuthState: AgentActivityIntegrationAuthState
+  trustState: AgentActivityTrustState
+  statusCheckedAt: string | null
+  supportLevel: 'unsupported' | 'detection-only' | 'manual' | 'snapshot' | 'automatic-partial' | 'automatic-task-terminal'
+  coverageState: AgentActivityCoverageState
+  coverageExplanation: string
+  capabilities: AgentActivityCapabilityDto
+  freshnessProfile: string
+  freshnessWindowSeconds: number
+  lastEventAt: string | null
+  lastSuccessAt: string | null
+  retainedLastSuccess: boolean
+  pendingEventCount: number
+  gapCount: number
+  failureCode: string | null
+  primaryAction: AgentActivityPrimaryAction
+}
+
+export interface AgentActivityAssignmentSummaryDto {
+  id: string
+  integrationId: string
+  ticketId: string
+  agent: AgentActivityAgentId
+  agentLabel: string
+  summary: string
+  summaryOwner: 'source' | 'human'
+  project: { kind: 'approved-project'; id: string; label: string } | { kind: 'unassigned' } | { kind: 'needs-review'; reviewId: string }
+  projectOwner: 'source' | 'human'
+  modelLabel: string | null
+  effectiveState: 'active' | 'waiting' | 'blocked' | 'needs-action' | 'completed' | 'failed' | 'cancelled' | 'stale'
+  retainedLastState: 'active' | 'waiting' | 'blocked' | 'needs-action' | 'completed' | 'failed' | 'cancelled'
+  lastObservedAt: string
+  freshUntil: string | null
+  terminalAt: string | null
+  terminalEvidence: string | null
+  terminalOutcome: 'completed' | 'failed' | 'cancelled' | null
+  evidenceKind: string
+  sourceUpdatePolicy: 'follow' | 'paused' | 'detached' | 'closed'
+  recordVersion: number
+  linkedTicketKind: 'sdd-task-execution' | null
+}
+
+export type AgentActivityAssignmentScope = 'active' | 'terminal' | 'all'
+export interface AgentActivityAssignmentQueryDto { scope?: AgentActivityAssignmentScope; limit?: number; cursor?: string | null }
+export interface AgentActivityAssignmentPageDto { items: AgentActivityAssignmentSummaryDto[]; nextCursor: string | null; total: number; scope: AgentActivityAssignmentScope }
+export interface AgentActivityAssignmentUpdateDto {
+  expectedVersion: number
+  safeSummary?: string
+  project?: { kind: 'approved-project'; id: string } | { kind: 'unassigned' }
+  sourceUpdatePolicy?: 'follow' | 'paused' | 'detached' | 'closed'
+}
+
+export interface AgentActivitySnapshotDto {
+  id: string
+  integrationId: string
+  mode: 'current-session' | 'next-interaction' | 'explicit-report'
+  state: 'requested' | 'waiting' | 'complete' | 'failed'
+  requestedAt: string
+  coverageStartedAt: string | null
+  coverageEndedAt: string | null
+  assignmentsObserved: number
+  gapCount: number
+  failureCode: string | null
+  limitation: string
+}
+
+export interface AgentActivityProjectCandidateDto { id: string; label: string; health: string; lifecycle: string; alreadyConnected: boolean; sddAvailable: boolean }
+export interface AgentActivityProjectReviewDto { id: string; integrationId: string; state: 'pending' | 'resolved' | 'dismissed'; candidateCount: number; resolvedProjectId: string | null; createdAt: string; resolvedAt: string | null }
+export interface AgentActivityManagementReceiptDto { operation: 'enable' | 'test' | 'pause' | 'reconnect' | 'remove' | 'snapshot' | 'clear-history' | 'project-preview' | 'project-commit' | 'project-review'; integrationId: string | null; outcome: 'complete' | 'waiting' | 'unavailable' | 'unsupported'; completedAt: string; changed: boolean; coverageState: AgentActivityCoverageState | null; nextAction: string; snapshot?: AgentActivitySnapshotDto }
+
+export interface OnboardingSourceDefinitionDto {
+  id: 'gmail' | 'project-folders' | 'agent-activity' | 'model-usage'
+  label: string
+  description: string
+  privacy: string
+  produces: string
+  state: OnboardingSourceState
+  reconciliationSourceId: SourceId | null
+  action: 'set-up' | 'review' | 'refresh' | 'view-details'
+  agentActivity?: AgentActivityIntegrationDto[]
+}
+export interface OnboardingSnapshotDto {
+  schemaVersion: 1
+  needsSetup: boolean
+  sources: OnboardingSourceDefinitionDto[]
+  lastRun: ReconciliationRunDto | null
+}
+
+export interface TicketLifecycleEventDto {
+  id: string
+  ticketId: string
+  fromStatus: string | null
+  toStatus: string
+  occurredAt: string
+  completionAt: string | null
+  origin: string
+  correlationId: string | null
 }
 
 export interface SourceRecord {
@@ -334,6 +481,68 @@ export interface OperationalRoutingPolicy {
   }>
 }
 
+export const ROUTING_CONNECTION_ADAPTER_IDS = ['pi-rpc', 'codex-cli', 'claude-code-cli', 'ollama-local', 'openrouter'] as const
+export type RoutingConnectionAdapterId = (typeof ROUTING_CONNECTION_ADAPTER_IDS)[number]
+export type RoutingConnectionAuthMode = 'tool-owned' | 'local-runtime' | 'companion-oauth'
+export type RoutingConnectionAuthState = 'unchecked' | 'ready' | 'required' | 'invalid' | 'unsupported'
+
+export interface RoutingConnectionDto {
+  id: string
+  adapterId: RoutingConnectionAdapterId
+  displayName: string
+  enabled: boolean
+  authMode: RoutingConnectionAuthMode
+  authState: RoutingConnectionAuthState
+  installedVersion: string | null
+  supportedRange: string | null
+  readinessCheckedAt: string | null
+  catalogRefreshedAt: string | null
+  config: Record<string, unknown>
+  secretRef: string | null
+}
+
+export type RoutingConnectionSummaryDto = Omit<RoutingConnectionDto, 'config' | 'secretRef'>
+
+export interface RoutingConnectionCatalogDto extends DestinationModelCatalogDto {
+  connectionId: string
+  source: 'cli' | 'local-runtime' | 'provider-api' | 'tested-manifest'
+  verification: 'observed' | 'manifest' | 'unknown'
+}
+
+export interface RoutingProfileV3 {
+  id: string
+  displayName: string
+  kind: 'executable' | 'legacy-manual'
+  connectionId: string | null
+  providerId: string | null
+  modelId: string
+  effort: string | null
+  readiness: RoutingProfileReadiness
+  enabled: boolean
+}
+
+export interface WorkTypeAssignmentDto {
+  capabilityId: string | 'default'
+  profileOrder: string[]
+  behavior: 'ask-before-send' | 'send-automatically'
+}
+
+export interface OperationalRoutingPolicyV3 {
+  schemaVersion: '3.0.0'
+  policyProfile: 'findmnemo.model-routing.v3'
+  policyVersion: number
+  updatedAt: string
+  capabilities: RoutingCapabilityDto[]
+  profiles: RoutingProfileV3[]
+  assignments: WorkTypeAssignmentDto[]
+}
+
+export interface OperationalPolicyV3MigrationPreview {
+  sourcePolicyRevision: string
+  policy: OperationalRoutingPolicyV3
+  disabledLegacyProfileIds: string[]
+}
+
 export interface RoutingPolicyValidationIssueDto {
   code: string
   path: string
@@ -476,6 +685,33 @@ export interface RoutingDispatchReceiptDto {
   failureCode: string | null
   requestHash: string
   resultHash: string | null
+}
+
+export interface RouteEvidenceDto {
+  connectionId: string | null
+  adapterId: string | null
+  providerId: string | null
+  modelId: string | null
+  effort: string | null
+  verification: 'destination-reported' | 'requested-unverified' | 'unknown'
+}
+
+export interface RoutingDispatchChainDto {
+  id: string
+  depth: number
+  parentDispatchId: string | null
+}
+
+export interface RoutingDispatchReceiptV2Dto {
+  id: string
+  policyVersion: number
+  requestedRoute: RouteEvidenceDto
+  actualRoute: RouteEvidenceDto | null
+  fallbackFromProfileIds: string[]
+  outcome: RoutingDispatchState
+  timing: { acceptedAt: string | null; startedAt: string | null; finishedAt: string | null }
+  failureCode: string | null
+  chain: RoutingDispatchChainDto
 }
 
 export const USAGE_VALUE_STATES = ['reported', 'calculated', 'estimated', 'unknown'] as const
@@ -938,6 +1174,21 @@ export function assertUsageBoundarySafe(input: unknown): void {
         throw new Error('USAGE_BOUNDARY_PROHIBITED_FIELD')
       }
       visit(nested)
+    }
+  }
+  visit(input)
+}
+
+export function assertAgentActivityBrowserSafe(input: unknown): void {
+  const serialized = JSON.stringify(input)
+  if (serialized.length > 512 * 1024) throw new Error('AGENT_ACTIVITY_DTO_TOO_LARGE')
+  const forbidden = /(?:canonicalPath|rawPath|transcript|originAssignmentId|originEvidenceId|hookPayload|retryContent|activityToken|secretRef|credential|fileContent)/i
+  const visit = (value: unknown): void => {
+    if (!value || typeof value !== 'object') return
+    if (Array.isArray(value)) { for (const item of value) visit(item); return }
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      if (forbidden.test(key)) throw new Error('AGENT_ACTIVITY_PRIVATE_FIELD')
+      visit(child)
     }
   }
   visit(input)

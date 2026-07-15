@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid,
@@ -7,9 +7,11 @@ import {
 import type { Ticket } from '../types'
 import { SOURCE_HEX, STATUS_LABELS } from '../types'
 import type { LLMSource, TicketStatus } from '../types'
+import type { CompletedRangePreset } from '../../shared/companion-contract'
 
 interface Props {
   tickets: Ticket[]
+  onOpenCompleted?: (preset: CompletedRangePreset) => void
 }
 
 const GRID = '#26343d'
@@ -25,7 +27,9 @@ function dayKey(d: Date): string {
   return `${d.getMonth() + 1}/${d.getDate()}`
 }
 
-export function Analytics({ tickets }: Props) {
+export function Analytics({ tickets, onOpenCompleted }: Props) {
+  const [completedRange, setCompletedRange] = useState<CompletedRangePreset>('30d')
+  const completionStart = useMemo(() => { const date = new Date(); if (completedRange === '12mo') date.setMonth(date.getMonth() - 12); else date.setDate(date.getDate() - Number(completedRange.replace('d', ''))); return date.getTime() }, [completedRange])
   const throughput = useMemo(() => {
     const days: { day: string; created: number; completed: number }[] = []
     for (let i = 13; i >= 0; i--) {
@@ -39,8 +43,8 @@ export function Analytics({ tickets }: Props) {
         return c >= d && c < next
       }).length
       const completed = tickets.filter((t) => {
-        if (t.status !== 'done') return false
-        const u = new Date(t.updatedAt)
+        if (t.status !== 'done' || !t.completedAt) return false
+        const u = new Date(t.completedAt)
         return u >= d && u < next
       }).length
       days.push({ day: dayKey(d), created, completed })
@@ -67,16 +71,15 @@ export function Analytics({ tickets }: Props) {
   }, [tickets])
 
   const cycleStats = useMemo(() => {
-    const done = tickets.filter((t) => t.status === 'done')
+    const done = tickets.filter((t) => t.status === 'done' && t.completedAt && new Date(t.completedAt).getTime() >= completionStart)
     if (done.length === 0) return { avg: '—', fastest: '—', throughputWk: 0 }
-    const hours = done.map((t) => (new Date(t.updatedAt).getTime() - new Date(t.createdAt).getTime()) / 3600_000)
+    const hours = done.map((t) => (new Date(t.completedAt!).getTime() - new Date(t.createdAt).getTime()) / 3600_000)
     const avg = hours.reduce((a, b) => a + b, 0) / hours.length
     const fastest = Math.min(...hours)
-    const weekAgo = Date.now() - 7 * 24 * 3600_000
-    const throughputWk = done.filter((t) => new Date(t.updatedAt).getTime() >= weekAgo).length
+    const throughputWk = done.length
     const fmt = (h: number) => h < 24 ? `${h.toFixed(1)}h` : `${(h / 24).toFixed(1)}d`
     return { avg: fmt(avg), fastest: fmt(fastest), throughputWk }
-  }, [tickets])
+  }, [completionStart, tickets])
 
   const decisions = useMemo(() => {
     const all = tickets.flatMap((t) => t.decisionLog)
@@ -96,6 +99,7 @@ export function Analytics({ tickets }: Props) {
 
   return (
     <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="hud-label">Completed-work period</p><p className="mt-1 text-xs text-faint">Cycle time and completion totals use explicit completion timestamps.</p></div><div className="flex flex-wrap gap-2">{(['7d', '30d', '90d', '12mo'] as const).map((value) => <button key={value} type="button" aria-pressed={completedRange === value} onClick={() => setCompletedRange(value)} className={`rounded-sm border px-3 py-2 text-xs ${completedRange === value ? 'border-sync bg-sync/15 text-sync' : 'border-line text-mut'}`}>{value === '12mo' ? '12 months' : value.replace('d', ' days')}</button>)}</div></div>
       {tickets.length === 0 && <div className="rounded-sm border border-memory/40 bg-memory/10 p-4 text-sm text-mut" role="status"><p className="font-semibold text-ink">Work Metrics needs operational ticket history</p><p className="mt-1">Create or reconcile tickets to populate workload and throughput. Cycle time requires completed tickets, and decision totals require ticket decision-log entries. Model tokens and cost are shown separately under Model Usage.</p></div>}
       {tickets.length > 0 && !tickets.some((ticket) => ticket.status === 'done') && <div className="rounded-sm border border-line p-3 text-sm text-mut" role="status">Cycle time and completed-work metrics will appear after at least one ticket reaches Done.</div>}
       {/* KPI row */}
@@ -106,7 +110,7 @@ export function Analytics({ tickets }: Props) {
         className="grid grid-cols-2 lg:grid-cols-4 gap-4"
       >
         <Kpi label="Avg Cycle Time" value={cycleStats.avg} sub="creation → done" />
-        <Kpi label="Completed (7d)" value={String(cycleStats.throughputWk)} sub="tickets shipped" />
+        <Kpi label={`Completed (${completedRange === '12mo' ? '12mo' : completedRange})`} value={String(cycleStats.throughputWk)} sub="Open matching history" onClick={onOpenCompleted ? () => onOpenCompleted(completedRange) : undefined} />
         <Kpi label="Decisions Logged" value={String(decisions.total)} sub={`${decisions.oneWay} one-way gates`} />
         <Kpi label="Fastest Resolution" value={cycleStats.fastest} sub="best cycle time" />
       </motion.div>
@@ -204,12 +208,11 @@ export function Analytics({ tickets }: Props) {
   )
 }
 
-function Kpi({ label, value, sub }: { label: string; value: string; sub: string }) {
-  return (
-    <div className="panel rounded-sm p-4">
+function Kpi({ label, value, sub, onClick }: { label: string; value: string; sub: string; onClick?: () => void }) {
+  const content = <>
       <p className="hud-label">{label}</p>
       <p className="text-2xl font-mono font-bold text-ink mt-1 tabular-nums">{value}</p>
       <p className="text-[11px] text-faint mt-0.5">{sub}</p>
-    </div>
-  )
+    </>
+  return onClick ? <button type="button" onClick={onClick} className="panel rounded-sm p-4 text-left hover:border-sync/60">{content}</button> : <div className="panel rounded-sm p-4">{content}</div>
 }

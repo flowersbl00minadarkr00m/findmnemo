@@ -1,5 +1,5 @@
 import type { LLMSource, Ticket, TicketStatus } from '../types'
-import type { CredentialCapabilityDto, DataCategoryId, DataExportPreviewDto, DataImportPreviewDto, DataPortabilityReceiptDto, DestinationDiscoveryDto, DestinationModelCatalogDto, GmailCandidateDto, GmailCheckDto, GmailTicketAssociationDto, OperationalPolicyMigrationPreview, OperationalRoutingPolicy, ProfileReadinessResultDto, ReconciliationRunDto, RoutingDispatchReceiptDto, SourceDescriptor, SourceId, UsageCapabilityDto, UsageCoverageDto, UsageManualMappingDto, UsageQueryDto, UsageRecordsPageDto, UsageRefreshRunDto, UsageRouteObservationDto, UsageSummaryDto } from '../../shared/companion-contract'
+import type { AgentActivityAssignmentPageDto, AgentActivityAssignmentQueryDto, AgentActivityAssignmentSummaryDto, AgentActivityAssignmentUpdateDto, AgentActivityIntegrationDto, AgentActivityManagementReceiptDto, AgentActivityProjectReviewDto, CompletedWorkQueryDto, CompletedWorkResultDto, CredentialCapabilityDto, DataCategoryId, DataExportPreviewDto, DataImportPreviewDto, DataPortabilityReceiptDto, DestinationDiscoveryDto, DestinationModelCatalogDto, GmailCandidateDto, GmailCheckDto, GmailTicketAssociationDto, OnboardingSnapshotDto, OperationalPolicyMigrationPreview, OperationalRoutingPolicy, OperationalRoutingPolicyV3, ProfileReadinessResultDto, ProjectFolderSummaryDto, ReconciliationRunDto, RoutingConnectionCatalogDto, RoutingConnectionSummaryDto, RoutingDispatchReceiptDto, RoutingProfileV3, SourceDescriptor, SourceId, UsageCapabilityDto, UsageCoverageDto, UsageManualMappingDto, UsageQueryDto, UsageRecordsPageDto, UsageRefreshRunDto, UsageRouteObservationDto, UsageSummaryDto } from '../../shared/companion-contract'
 
 export interface GmailSourceStatus {
   configured?: boolean
@@ -22,6 +22,8 @@ export interface OperationalRepository {
   updateTicketStatus(ticket: Ticket, status: TicketStatus): Promise<Ticket>
   addWorkNote(ticket: Ticket, text: string, author: string): Promise<Ticket>
   deleteTicket(ticketId: string): Promise<void>
+  queryCompletedWork?(query: CompletedWorkQueryDto): Promise<CompletedWorkResultDto>
+  downloadCompletedWork?(query: CompletedWorkQueryDto, format: 'json' | 'csv'): Promise<void>
   listEmailCandidates?(): Promise<GmailCandidateDto[]>
   startGmailCheck?(): Promise<GmailCheckDto>
   getGmailCheck?(runId: string): Promise<GmailCheckDto>
@@ -30,6 +32,14 @@ export interface OperationalRepository {
   decideEmailCandidate?(candidate: GmailCandidateDto, action: 'confirm' | 'dismiss' | 'defer'): Promise<GmailCandidateDto>
   associateEmailCandidate?(candidate: GmailCandidateDto, input: { mode: 'create'; ticket: Ticket } | { mode: 'link'; ticketId: string }, idempotencyKey: string): Promise<GmailTicketAssociationDto>
   listReconciliationSources?(): Promise<SourceDescriptor[]>
+  getOnboardingSnapshot?(): Promise<OnboardingSnapshotDto>
+  startOnboardingRefresh?(sourceIds: SourceId[]): Promise<ReconciliationRunDto>
+  listAgentActivityIntegrations?(): Promise<AgentActivityIntegrationDto[]>
+  listAgentActivityAssignments?(query?: AgentActivityAssignmentQueryDto): Promise<AgentActivityAssignmentPageDto>
+  updateAgentActivityAssignment?(assignmentId: string, input: AgentActivityAssignmentUpdateDto): Promise<AgentActivityAssignmentSummaryDto>
+  manageAgentActivity?(integrationId: string, action: 'enable' | 'test' | 'pause' | 'reconnect' | 'remove' | 'snapshot' | 'clear-history', confirmed?: boolean): Promise<AgentActivityManagementReceiptDto>
+  listAgentActivityProjectReviews?(): Promise<AgentActivityProjectReviewDto[]>
+  resolveAgentActivityProjectReview?(reviewId: string, projectId: string | null, confirmed: boolean): Promise<AgentActivityManagementReceiptDto>
   startReconciliation?(sourceIds?: SourceId[]): Promise<ReconciliationRunDto>
   getReconciliationRun?(runId: string): Promise<ReconciliationRunDto>
   listReconciliationRuns?(): Promise<ReconciliationRunDto[]>
@@ -46,6 +56,18 @@ export interface OperationalRepository {
   getPiModelCatalog?(): Promise<DestinationModelCatalogDto>
   validateRoutingProfile?(profileId: string, expectedPolicyVersion: number): Promise<{ readiness: ProfileReadinessResultDto; policy: OperationalRoutingPolicy }>
   listRoutingDispatchReceipts?(): Promise<RoutingDispatchReceiptDto[]>
+  listRoutingConnections?(): Promise<RoutingConnectionSummaryDto[]>
+  discoverRoutingConnections?(): Promise<RoutingConnectionSummaryDto[]>
+  refreshRoutingConnection?(connectionId: string): Promise<{ connection: RoutingConnectionSummaryDto; catalog: RoutingConnectionCatalogDto }>
+  getRoutingConnectionCatalog?(connectionId: string): Promise<RoutingConnectionCatalogDto>
+  setRoutingConnectionEnabled?(connectionId: string, enabled: boolean): Promise<RoutingConnectionSummaryDto>
+  getRoutingPolicyV3?(): Promise<OperationalRoutingPolicyV3 | null>
+  updateRoutingPolicyV3?(policy: OperationalRoutingPolicyV3, expectedPolicyVersion: number | null): Promise<OperationalRoutingPolicyV3>
+  validateRoutingProfileV3?(profileId: string): Promise<RoutingProfileV3>
+  listProjectFolders?(): Promise<ProjectFolderSummaryDto[]>
+  updateProjectFolder?(id: string, input: { label?: string; state?: 'active' | 'paused'; sddEnrichmentEnabled?: boolean }): Promise<ProjectFolderSummaryDto>
+  removeProjectFolder?(id: string): Promise<boolean>
+  startOpenRouterConnection?(): Promise<{ authorizationUrl: string; expiresAt: string }>
   cancelRoutingDispatch?(receiptId: string): Promise<RoutingDispatchReceiptDto>
   retryRoutingDispatch?(receiptId: string, idempotencyKey: string): Promise<RoutingDispatchReceiptDto>
   getUsageCapability?(): Promise<UsageCapabilityDto>

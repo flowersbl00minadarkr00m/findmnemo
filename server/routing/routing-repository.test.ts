@@ -4,6 +4,8 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { OperationalPolicyMigrationPreview, OperationalRoutingPolicy } from '../../shared/companion-contract.js'
 import { openFindMnemoDatabase } from '../db/database.js'
+import { RoutingConnectionRepository } from './connection-repository.js'
+import { migratePolicyV2ToV3 } from './routing-policy-v3.js'
 import { RoutingRepository } from './routing-repository.js'
 
 const cleanup: string[] = []
@@ -91,6 +93,45 @@ describe('RoutingRepository', () => {
     const readiness = { profileId: 'route:pi-writing', state: 'ready' as const, checkedAt: '2026-07-12T20:01:00.000Z', expiresAt: '2026-07-12T20:16:00.000Z', adapterVersion: '1.0.0', installedVersion: '0.80.3', reasonCode: null }
     expect(repository.applyReadiness(readiness.profileId, readiness, 1)).toMatchObject({ status: 'saved', policy: { policyVersion: 2, profiles: [{ readiness: { state: 'ready' } }] } })
     expect(repository.applyReadiness(readiness.profileId, readiness, 1)).toMatchObject({ status: 'conflict', current: { policyVersion: 2 } })
+    database.close()
+  })
+
+  it('previews and commits a conservative v2 to v3 migration idempotently', async () => {
+    const path = await databasePath()
+    const database = await openFindMnemoDatabase({ path })
+    const legacy = policy()
+    legacy.profiles.push({ ...legacy.profiles[0], id: 'route:codex', displayName: 'Codex', destinationAdapterId: 'codex-cli', destinationInstanceId: 'codex:default', modelId: 'gpt-5.4', fallbackOrder: 1 })
+    legacy.defaultProfileOrder = ['route:codex', 'route:pi-writing']
+    legacy.capabilityOverrides = [{ capabilityId: 'writing', profileOrder: ['route:codex', 'route:pi-writing'] }]
+    const migration = migratePolicyV2ToV3(legacy, 'v2:1')
+    expect(migration.preview.disabledLegacyProfileIds).toEqual(['route:pi-writing'])
+    expect(migration.preview.policy.profiles).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'route:pi-writing', kind: 'legacy-manual', enabled: false, connectionId: null }),
+      expect.objectContaining({ id: 'route:codex', kind: 'executable', enabled: false, connectionId: 'connection:codex:default' }),
+    ]))
+    expect(migration.preview.policy.assignments).toEqual([
+      expect.objectContaining({ capabilityId: 'default', profileOrder: ['route:codex'] }),
+      expect.objectContaining({ capabilityId: 'writing', profileOrder: ['route:codex'] }),
+    ])
+    const connections = new RoutingConnectionRepository(database.db)
+    for (const item of migration.connections) connections.save(item)
+    const repository = new RoutingRepository(database.db)
+    expect(repository.readPolicyV3()).toBeNull()
+    const committed = repository.commitMigrationV3(migration.preview, connections.list(), '2026-07-14T10:00:00.000Z')
+    expect(repository.commitMigrationV3(migration.preview, connections.list(), '2026-07-14T10:01:00.000Z')).toEqual(committed)
+    expect(committed).toMatchObject({ policyVersion: 1, profiles: [{ enabled: false }, { enabled: false }] })
+    database.close()
+  })
+
+  it('persists requested and actual route evidence as distinct receipt states', async () => {
+    const path = await databasePath()
+    const database = await openFindMnemoDatabase({ path })
+    const repository = new RoutingRepository(database.db)
+    const base = { id: 'dispatch:1', idempotencyKey: 'key:1', generation: 0, priorReceiptId: null, origin: { adapterId: 'codex', correlationId: 'correlation:1', conversationRefHash: null }, capabilityIds: ['writing'], classificationSource: 'explicit' as const, policyVersion: 1, requestedProfileSnapshot: { profileId: 'route:codex', destinationAdapterId: 'codex-cli', destinationInstanceId: 'codex:default', providerId: 'openai', modelId: 'gpt-5.4', effort: 'high', behavior: 'recommend' as const }, createdAt: '2026-07-14T10:00:00.000Z', requestHash: 'sha256:request', requestedRoute: { connectionId: 'connection:codex', adapterId: 'codex-cli', providerId: 'openai', modelId: 'gpt-5.4', effort: 'high', verification: 'requested-unverified' as const }, fallbackFromProfileIds: [], chain: { id: 'chain:1', depth: 0, parentDispatchId: null } }
+    const created = repository.createDispatchReceiptV2(base)
+    expect(created.receipt).toMatchObject({ actualRoute: null, requestedRoute: { verification: 'requested-unverified' }, outcome: 'requested' })
+    const updated = repository.updateDispatchReceiptV2('dispatch:1', { outcome: 'completed', actualRoute: { ...base.requestedRoute, verification: 'destination-reported' }, startedAt: '2026-07-14T10:00:01.000Z', finishedAt: '2026-07-14T10:00:02.000Z' })
+    expect(updated).toMatchObject({ actualRoute: { verification: 'destination-reported' }, outcome: 'completed' })
     database.close()
   })
 })

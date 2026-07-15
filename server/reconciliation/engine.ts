@@ -9,6 +9,7 @@ import type {
   SourceRecord,
 } from '../../shared/companion-contract.js'
 import type { OperationalRepository, StoredTicket } from '../db/operational-repository.js'
+import type { TicketLifecycleService } from '../tickets/ticket-lifecycle-service.js'
 
 const ZERO_COUNTS = { checked: 0, added: 0, updated: 0, unchanged: 0, excluded: 0, duplicate: 0, unresolved: 0 }
 
@@ -16,14 +17,17 @@ export class ReconciliationEngine {
   private readonly adapters = new Map<SourceId, LocalSourceAdapter>()
   private readonly repository: OperationalRepository
   private readonly clock: () => Date
+  private readonly lifecycle?: TicketLifecycleService
 
   constructor(
     repository: OperationalRepository,
     adapters: readonly LocalSourceAdapter[],
     clock: () => Date = () => new Date(),
+    lifecycle?: TicketLifecycleService,
   ) {
     this.repository = repository
     this.clock = clock
+    this.lifecycle = lifecycle
     for (const adapter of adapters) this.adapters.set(adapter.descriptor.id, adapter)
   }
 
@@ -146,7 +150,8 @@ export class ReconciliationEngine {
       return { ...base, classification: 'unresolved', reasonCode: 'REVIEW_REQUIRED' }
     }
     const ticket = ticketFromRecord(record, this.clock().toISOString())
-    this.repository.saveTicket(ticket)
+    if (this.lifecycle) this.lifecycle.createWithinTransaction(ticket, `reconciliation:${record.sourceId}`)
+    else this.repository.saveTicket(ticket)
     this.repository.linkTicketSource(ticket.id, record.sourceId, record.externalId, record.provenanceRef)
     this.repository.saveSourceRecord(record)
     return { ...base, classification: 'added', ticketId: ticket.id }
@@ -155,7 +160,9 @@ export class ReconciliationEngine {
   private updateLinkedTicket(ticketId: string, record: SourceRecord): void {
     const ticket = this.repository.getTicket(ticketId)
     if (!ticket) throw new Error('linked ticket missing')
-    this.repository.saveTicket({ ...ticket, status: approvedStatus(record.state, ticket.status), updatedAt: this.clock().toISOString(), payload: { ...ticket.payload, title: record.title } })
+    const status = approvedStatus(record.state, ticket.status)
+    if (this.lifecycle) this.lifecycle.transitionWithinTransaction({ ticketId, expectedUpdatedAt: ticket.updatedAt, nextPayload: { ...ticket.payload, title: record.title, status }, origin: `reconciliation:${record.sourceId}` })
+    else this.repository.saveTicket({ ...ticket, status, updatedAt: this.clock().toISOString(), payload: { ...ticket.payload, title: record.title } })
   }
 }
 

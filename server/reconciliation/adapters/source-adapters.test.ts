@@ -56,6 +56,7 @@ describe('registered project and agent-ledger adapters', () => {
     const run = await engine.run()
 
     expect(run).toMatchObject({ state: 'failed', sources: [{ sourceId: 'agent-ledger', state: 'skipped', reasonCode: 'DISABLED_BY_USER' }] })
+    expect(new AgentLedgerAdapter(repository).descriptor).toMatchObject({ label: 'Legacy manual agent ledger', enabled: false, policy: 'review' })
     expect(database.db.prepare('SELECT count(*) AS count FROM source_records').get()).toEqual({ count: 0 })
   })
 
@@ -72,6 +73,7 @@ describe('registered project and agent-ledger adapters', () => {
     const run = await engine.run()
 
     expect(run.state).toBe('partial')
+    expect(database.db.prepare('SELECT count(*) AS count FROM agent_assignments').get()).toEqual({ count: 0 })
     expect(run.items).toEqual(expect.arrayContaining([
       expect.objectContaining({ externalId: 'event-1', classification: 'duplicate' }),
       expect.objectContaining({ externalId: 'malformed-line-3', classification: 'unresolved', reasonCode: 'AMBIGUOUS_PROVENANCE' }),
