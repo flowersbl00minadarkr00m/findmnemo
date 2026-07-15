@@ -1,7 +1,7 @@
 import type { CompanionConnectionState } from '../../shared/companion-contract'
 
 const COPY: Record<CompanionConnectionState, { label: string; detail: string }> = {
-  'not-installed': { label: 'FindMnemo is not running on this computer', detail: 'Open the installed FindMnemo app, then try again.' },
+  'not-installed': { label: 'Local companion not detected', detail: 'It may not be installed or it may be stopped. Install or open FindMnemo on this computer, then retry.' },
   stopped: { label: 'FindMnemo is stopped', detail: 'Open the installed app and choose Start, then try again.' },
   'permission-required': { label: 'Permission needed to connect this computer', detail: 'Choose Connect this computer. Your browser may ask to contact an app on this device.' },
   'permission-denied': { label: 'Local network permission denied', detail: 'Reset this site permission in the browser or use the local fallback.' },
@@ -9,7 +9,7 @@ const COPY: Record<CompanionConnectionState, { label: string; detail: string }> 
   connected: { label: 'Companion connected', detail: 'Identity, paired session, and authenticated status are verified.' },
   stale: { label: 'Connection stale', detail: 'The last verified status is old. Retry before trusting operational counts.' },
   unsupported: { label: 'Hosted connection unsupported', detail: 'Open the local fallback at 127.0.0.1:3210/app.' },
-  error: { label: 'Connection error', detail: 'The cause is not yet verified. Retry or use companion diagnostics.' },
+  error: { label: 'Connection could not be verified', detail: 'FindMnemo reached the local boundary but could not confirm a healthy companion. Review the diagnostic code and recovery steps.' },
 }
 
 export function ConnectionStatus({ state }: { state: CompanionConnectionState }) {

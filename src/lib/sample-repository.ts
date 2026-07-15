@@ -1,7 +1,7 @@
 import { DEMO_ACTIVITIES, DEMO_EMAILS, DEMO_TICKETS } from './demo-data'
 import type { AgentActivity, EmailThread, LLMSource, Ticket, TicketStatus } from '../types'
 
-const SAMPLE_SESSION_KEY = 'findmnemo.sample.workspace.v1'
+const SAMPLE_SESSION_KEY = 'findmnemo.sample.workspace.v2'
 
 export interface SampleWorkspaceData {
   tickets: Ticket[]
@@ -87,7 +87,13 @@ export function updateSampleTicketStatus(
   const updatedAt = new Date().toISOString()
   return saveSampleWorkspace({
     ...data,
-    tickets: data.tickets.map((ticket) => ticket.id === id ? { ...ticket, status, updatedAt } : ticket),
+    tickets: data.tickets.map((ticket) => {
+      if (ticket.id !== id) return ticket
+      const completedAt = status === 'done'
+        ? ticket.status === 'done' && ticket.completedAt ? ticket.completedAt : updatedAt
+        : null
+      return { ...ticket, status, updatedAt, completedAt }
+    }),
   })
 }
 

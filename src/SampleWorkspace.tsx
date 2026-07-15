@@ -24,6 +24,8 @@ const Analytics = lazy(() => import('./components/Analytics').then((module) => (
 const DailyBrief = lazy(() => import('./components/DailyBrief').then((module) => ({ default: module.DailyBrief })))
 const EmailPanel = lazy(() => import('./components/EmailPanel').then((module) => ({ default: module.EmailPanel })))
 const DataPrivacyView = lazy(() => import('./components/DataPrivacyView').then((module) => ({ default: module.DataPrivacyView })))
+const SampleEnginesView = lazy(() => import('./components/SampleInsights').then((module) => ({ default: module.SampleEnginesView })))
+const SampleUsageView = lazy(() => import('./components/SampleInsights').then((module) => ({ default: module.SampleUsageView })))
 
 export function SampleWorkspace() {
   const [data, setData] = useState(loadSampleWorkspace)
@@ -92,9 +94,9 @@ export function SampleWorkspace() {
               {view === 'operations' && <OperationsDesk projection={attentionProjection} selectedId={selectedAttentionId} selectedTicket={selectedAttentionTicket} onSelectedIdChange={setSelectedAttentionId} onOpenTicket={setDetailId} onAction={handleSampleAttentionAction} onSync={() => setReconcileStatus(`Sample reconciliation checked ${data.tickets.length} fictional tickets; no operational data was accessed.`)} homeView="operations" onHomeViewChange={selectHomeView} />}
               {view === 'brief' && <DailyBrief projection={attentionProjection} selectedId={selectedAttentionId} selectedTicket={selectedAttentionTicket} onSelectedIdChange={setSelectedAttentionId} onAction={handleSampleAttentionAction} onHomeViewChange={selectHomeView} />}
               {view === 'tickets' && <div className="space-y-4"><div className="flex flex-wrap items-center justify-between gap-3"><FilterBar filters={filters} onChange={setFilters} resultCount={filtered.length} totalCount={data.tickets.length} /><NewTicketForm onCreate={(title, description, source) => setData((current) => createSampleTicket(current, title, description, source))} /></div><TicketBoard tickets={filtered} allTickets={data.tickets} onStatusChange={updateStatus} onDelete={deleteTicket} onAddNote={addNote} onOpenDetail={setDetailId} /></div>}
-              {(view === 'analytics' || view === 'usage') && <div className="space-y-4"><div className="flex justify-end"><MetricsViewSwitch value={view} onChange={selectMetricsView} /></div>{view === 'analytics' ? <Analytics tickets={data.tickets} /> : <section className="panel rounded-sm p-6"><p className="hud-label">Fictional Sample workspace</p><h2 className="mt-2 text-xl font-semibold">Sample model usage</h2><p className="mt-2 text-sm text-mut">This is a static walkthrough only. It does not run Tokscale or imply that fictional usage is live.</p></section>}</div>}
+              {(view === 'analytics' || view === 'usage') && <div className="space-y-4"><div className="flex justify-end"><MetricsViewSwitch value={view} onChange={selectMetricsView} /></div>{view === 'analytics' ? <Analytics tickets={data.tickets} /> : <SampleUsageView />}</div>}
               {view === 'emails' && <EmailPanel emails={data.emails} onRefresh={reset} loading={false} sample />}
-              {view === 'routing' && <section className="panel rounded-sm p-6"><p className="hud-label">Fictional Sample workspace</p><h2 className="mt-2 text-xl font-semibold">Sample model routing</h2><p className="mt-2 text-sm text-mut">This is a static walkthrough only. It does not call the companion or configure real AI providers.</p></section>}
+              {view === 'routing' && <SampleEnginesView />}
               {view === 'settings' && <DataPrivacyView sample />}
             </Suspense>
           </div>

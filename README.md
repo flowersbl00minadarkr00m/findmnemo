@@ -2,7 +2,7 @@
 
 FindMnemo is MIT-licensed local-first software. macOS/Linux users can follow the zero-cost [source-run guide](docs/source-run.md); Windows users can build from source or use the separately labeled [unsigned preview](docs/unsigned-windows-preview.md). Platform claims are listed in [docs/platform-support.md](docs/platform-support.md).
 
-The hosted interface is available at [findmnemo.vercel.app](https://findmnemo.vercel.app). The previous `mnemosync.vercel.app` address remains a compatibility fallback.
+The public fictional product tour is available at [findmnemo.vercel.app/demo](https://findmnemo.vercel.app/demo). The operational route at `/app` requires the local Windows companion to be installed and running; the Vercel interface cannot install or start it. The previous `mnemosync.vercel.app` address remains a compatibility fallback.
 
 FindMnemo is a local-private operations workspace for tracking work across Pi, Codex, and Claude Code. It combines ticket management, SDD progress, Gmail follow-up triage, model-routing preferences, privacy-minimized active assignments, and source reconciliation without treating simulated or stale data as live evidence.
 

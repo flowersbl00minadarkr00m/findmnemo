@@ -73,6 +73,7 @@ export const DEMO_TICKETS: Ticket[] = [
     decisionLog: [],
     createdAt: daysAgo(3, 13),
     updatedAt: daysAgo(1, 7),
+    completedAt: daysAgo(1, 7),
   },
   {
     id: 't4',
@@ -138,6 +139,7 @@ export const DEMO_TICKETS: Ticket[] = [
     ],
     createdAt: daysAgo(7, 9),
     updatedAt: daysAgo(5, 11),
+    completedAt: daysAgo(5, 11),
   },
   {
     id: 't8',
@@ -156,6 +158,7 @@ export const DEMO_TICKETS: Ticket[] = [
     ],
     createdAt: daysAgo(10, 10),
     updatedAt: daysAgo(9, 14),
+    completedAt: daysAgo(9, 14),
   },
   {
     id: 't9',
@@ -173,6 +176,7 @@ export const DEMO_TICKETS: Ticket[] = [
     decisionLog: [],
     createdAt: daysAgo(5, 8),
     updatedAt: daysAgo(4, 13),
+    completedAt: daysAgo(4, 13),
   },
   {
     id: 't10',
@@ -218,6 +222,7 @@ export const DEMO_TICKETS: Ticket[] = [
     ],
     createdAt: daysAgo(11, 10),
     updatedAt: daysAgo(8, 17),
+    completedAt: daysAgo(8, 17),
   },
 ]
 

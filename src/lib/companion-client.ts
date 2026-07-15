@@ -50,6 +50,7 @@ import type { Ticket } from '../types'
 const COMPANION_BASE_URL = 'http://127.0.0.1:3210/api/v1'
 const STALE_AFTER_MS = 2 * 60_000
 const SESSION_ROTATION_LEAD_MS = 2 * 60_000
+const IDENTITY_REQUEST_TIMEOUT_MS = 6_000
 
 export interface CompanionSession {
   token: string
@@ -116,10 +117,16 @@ export function deriveCompanionConnectionState(
   return Number.isFinite(successfulAt) && now - successfulAt > STALE_AFTER_MS ? 'stale' : 'connected'
 }
 
-export async function getCompanionIdentity(): Promise<CompanionIdentityDto> {
-  const response = await request<CompanionIdentityDto>('/identity')
-  if (response.error || !response.data) throw new Error(response.error?.code ?? 'IDENTITY_MISMATCH')
-  return response.data
+export async function getCompanionIdentity(timeoutMs = IDENTITY_REQUEST_TIMEOUT_MS): Promise<CompanionIdentityDto> {
+  const controller = new AbortController()
+  const timer = globalThis.setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await request<CompanionIdentityDto>('/identity', { signal: controller.signal })
+    if (response.error || !response.data) throw new Error(response.error?.code ?? 'IDENTITY_MISMATCH')
+    return response.data
+  } finally {
+    globalThis.clearTimeout(timer)
+  }
 }
 
 export async function pairCompanion(code: string, nonce = browserNonce()): Promise<CompanionSession> {
