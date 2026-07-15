@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CompanionConnectionState, CompanionIdentityDto } from '../../shared/companion-contract'
 import {
   bootstrapLocalCompanion,
@@ -15,7 +15,8 @@ import {
 import { ConnectionStatus } from './ConnectionStatus'
 import { PairingDialog } from './PairingDialog'
 import { createCompanionRepository } from '../lib/companion-repository'
-import App from '../App'
+
+const OperationalWorkspace = lazy(() => import('../App'))
 
 const WINDOWS_PREVIEW_GUIDE = 'https://github.com/flowersbl00minadarkr00m/findmnemo/blob/main/docs/unsigned-windows-preview.md'
 
@@ -114,13 +115,15 @@ export function OperationalOnboarding() {
 
   if (connectionState === 'connected' && operationalRepository) {
     return (
-      <div className="relative">
-        <div className="fixed right-3 bottom-3 z-50 flex items-center gap-2 rounded-sm border border-memory/40 bg-chrome-raised px-3 py-2 text-xs text-memory shadow-xl">
-          <span>Companion verified</span>
-          <button type="button" onClick={disconnect} className="underline">Disconnect</button>
+      <Suspense fallback={<OperationalWorkspaceLoading />}>
+        <div className="relative">
+          <div className="fixed right-3 bottom-3 z-50 flex items-center gap-2 rounded-sm border border-memory/40 bg-chrome-raised px-3 py-2 text-xs text-memory shadow-xl">
+            <span>Companion verified</span>
+            <button type="button" onClick={disconnect} className="underline">Disconnect</button>
+          </div>
+          <OperationalWorkspace operationalRepository={operationalRepository} />
         </div>
-        <App operationalRepository={operationalRepository} />
-      </div>
+      </Suspense>
     )
   }
 
@@ -158,6 +161,14 @@ export function OperationalOnboarding() {
           <a href={localFallback ? 'https://findmnemo.vercel.app/app' : '/'} className="px-4 py-2 text-sm text-mut hover:text-ink">{localFallback ? 'Return to hosted setup' : 'Back'}</a>
         </div>
       </section>
+    </main>
+  )
+}
+
+function OperationalWorkspaceLoading() {
+  return (
+    <main className="min-h-screen bg-mist text-ink grid place-items-center px-5 py-10">
+      <p className="text-sm text-mut" role="status">Loading the verified operational workspace...</p>
     </main>
   )
 }
