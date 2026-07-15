@@ -1,7 +1,7 @@
 export interface SafeSpawnCommand { executable: string; args: string[] }
 
 const SAFE_EXECUTABLE = /^[A-Za-z0-9._-]+\.cmd$/i
-const SAFE_ARGUMENT = /^[A-Za-z0-9._:/-]+$/
+const SAFE_ARGUMENT = /^[A-Za-z0-9._:/=,-]+$/
 
 export function safeSpawnCommand(executable: string, args: readonly string[]): SafeSpawnCommand {
   if (process.platform !== 'win32' || !executable.toLowerCase().endsWith('.cmd')) return { executable, args: [...args] }

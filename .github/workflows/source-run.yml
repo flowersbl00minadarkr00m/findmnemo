@@ -26,18 +26,6 @@ jobs:
           - name: Windows arm64 (preview runner)
             os: windows-11-arm
             arch: arm64
-          - name: macOS Intel
-            os: macos-15-intel
-            arch: x64
-          - name: macOS Apple silicon
-            os: macos-15
-            arch: arm64
-          - name: Ubuntu 24.04 x64
-            os: ubuntu-24.04
-            arch: x64
-          - name: Ubuntu 24.04 arm64 (preview runner)
-            os: ubuntu-24.04-arm
-            arch: arm64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     steps:

@@ -31,6 +31,7 @@ import type { OperationalRepository } from '../lib/operational-repository'
 import type { UsageQueryDto } from '../../shared/companion-contract'
 import { GuidedRoutingSetup } from './routing/GuidedRoutingSetup'
 import { DispatchHistory } from './routing/DispatchHistory'
+import { ExecutableRoutingSetup } from './routing/ExecutableRoutingSetup'
 
 export interface ModelRoutingViewProps {
   policy: ModelRoutingPolicy
@@ -764,6 +765,21 @@ export function AdvancedRoutingPolicy({ policy, loadIssue, ticket, onPolicyChang
 
 export function ModelRoutingView(props: ModelRoutingViewProps) {
   const [mode, setMode] = useState<'guided' | 'advanced'>(() => props.ticket ? 'advanced' : 'guided')
+  const executable = Boolean(props.operationalRepository?.listRoutingConnections && props.operationalRepository?.getRoutingPolicyV3 && props.operationalRepository?.updateRoutingPolicyV3)
+
+  if (executable && props.operationalRepository) {
+    return (
+      <section className="space-y-5" aria-labelledby="routing-page-heading">
+        <div className="min-w-0">
+          <p className="text-[10px] font-mono uppercase tracking-[0.18em] text-sync">Connected engine routing</p>
+          <h1 id="routing-page-heading" className="mt-1 text-2xl font-semibold text-chrome-ink">Choose who handles each kind of work</h1>
+          <p className="mt-1 max-w-3xl text-sm text-chrome-mut">Connect an engine, choose an exact model, then assign it once. FindMnemo can dispatch from a connected chat and return the result there.</p>
+        </div>
+        <ExecutableRoutingSetup legacyPolicy={props.policy} operationalRepository={props.operationalRepository} onOpenUsage={props.onOpenUsage} />
+        <DispatchHistory operationalRepository={props.operationalRepository} />
+      </section>
+    )
+  }
 
   return (
     <section className="space-y-5" aria-labelledby="routing-page-heading">

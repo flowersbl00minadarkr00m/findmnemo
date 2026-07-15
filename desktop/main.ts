@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto'
+import { homedir } from 'node:os'
 import { copyFile, mkdir, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, protocol, shell, Tray, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, protocol, shell, Tray, type IpcMainInvokeEvent, type OpenDialogOptions } from 'electron'
 import electronUpdater from 'electron-updater'
 import { COMPANION_PROTOCOL_VERSION } from '../shared/companion-contract.js'
 import { DATABASE_SCHEMA_VERSION } from '../server/db/database.js'
@@ -19,6 +20,8 @@ import { SupportBundleService } from './lifecycle/support-bundle.js'
 import { UpdateCoordinator } from './lifecycle/update-service.js'
 import { UpdateRecoveryStore } from './lifecycle/update-recovery.js'
 import { UninstallService } from './lifecycle/uninstall.js'
+import { activityReporterCommand } from './agent-activity/reporter-command.js'
+import { runActivityHookReporter } from '../server/agent-activity/hook-reporter-command.js'
 
 const currentDirectory = fileURLToPath(new URL('.', import.meta.url))
 const { autoUpdater } = electronUpdater
@@ -26,7 +29,7 @@ const appRoot = app.getAppPath()
 const rendererRoot = join(appRoot, 'dist-desktop-renderer')
 const allowedRendererUrl = 'findmnemo://app/desktop.html'
 const trustedTargets: Record<TrustedTarget, string> = {
-  'hosted-app': 'https://mnemosync.vercel.app/app',
+  'hosted-app': 'https://findmnemo.vercel.app/app',
   'local-app': 'http://127.0.0.1:3210/app',
   'support-docs': 'https://mnemosync.vercel.app/',
 }
@@ -35,6 +38,7 @@ const updateFeedUrl = 'https://mnemosync.vercel.app/releases/windows/x64/'
 let window: BrowserWindow | undefined
 let tray: Tray | undefined
 let controller: LifecycleController | undefined
+let companionHost: PackagedCompanionHost | undefined
 let diagnostics: LifecycleDiagnosticsService | undefined
 let supportBundles: SupportBundleService | undefined
 let updates: UpdateCoordinator | undefined
@@ -48,7 +52,12 @@ let quitting = false
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'findmnemo', privileges: { standard: true, secure: true, stream: true, supportFetchAPI: false, corsEnabled: false } }])
 
-if (process.argv.includes('--apply-uninstall-plan')) void app.whenReady().then(applyUninstallPlan)
+if (process.argv.includes('--activity-hook')) void app.whenReady().then(async () => {
+  const outcome = await runActivityHookReporter()
+  if (process.env.FINDMNEMO_ACTIVITY_ACCEPTANCE === '1') process.stdout.write(`${outcome}\n`)
+  app.exit(0)
+}, () => app.exit(1))
+else if (process.argv.includes('--apply-uninstall-plan')) void app.whenReady().then(applyUninstallPlan)
 else if (!app.requestSingleInstanceLock()) app.quit()
 else {
   app.on('second-instance', () => showWindow())
@@ -73,12 +82,14 @@ async function boot(): Promise<void> {
     app.setLoginItemSettings({ openAtLogin: enabled, args: ['--background'] })
     return app.getLoginItemSettings({ args: ['--background'] }).openAtLogin
   })
-  const host = new PackagedCompanionHost({
+  companionHost = new PackagedCompanionHost({
     appVersion: app.getVersion(),
     instanceId: settings.instanceId,
     distPath: join(appRoot, 'dist'),
+    homeDirectory: homedir(),
+    activityReporterCommand: activityReporterCommand({ appRoot, executablePath: process.execPath, packaged: app.isPackaged, resourcesPath: process.resourcesPath }),
   })
-  controller = new LifecycleController(host, {
+  controller = new LifecycleController(companionHost, {
     appVersion: app.getVersion(),
     protocolVersion: COMPANION_PROTOCOL_VERSION,
     instanceId: settings.instanceId,
@@ -252,6 +263,20 @@ function registerIpc(): void {
     setTimeout(() => void quitApplication(), 250).unref()
     return { ok: true }
   })
+  ipcMain.handle(LIFECYCLE_IPC.pairingSnapshot, (event) => { assertTrustedSender(event); return requiredCompanionHost().pairingSnapshot() })
+  ipcMain.handle(LIFECYCLE_IPC.refreshPairingCode, (event) => { assertTrustedSender(event); return requiredCompanionHost().refreshPairingCode() })
+  ipcMain.handle(LIFECYCLE_IPC.chooseProjectFolders, async (event) => {
+    assertTrustedSender(event)
+    const options: OpenDialogOptions = { title: 'Choose project folders for FindMnemo', properties: ['openDirectory', 'multiSelections'] }
+    const selected = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options)
+    if (selected.canceled) return { state: 'cancelled', items: [], confirmationRequired: false }
+    return requiredCompanionHost().previewProjectFolders(selected.filePaths)
+  })
+  ipcMain.handle(LIFECYCLE_IPC.commitProjectFolders, (event, previewId: unknown, warningsConfirmed: unknown) => {
+    assertTrustedSender(event)
+    if (typeof previewId !== 'string' || typeof warningsConfirmed !== 'boolean') throw new Error('Project folder confirmation is invalid.')
+    return requiredCompanionHost().commitProjectFolders(previewId, warningsConfirmed)
+  })
   ipcMain.handle(LIFECYCLE_IPC.openTrustedTarget, async (event, target: unknown) => {
     assertTrustedSender(event)
     if (!isTrustedTarget(target)) throw new Error('Trusted target is invalid.')
@@ -266,6 +291,11 @@ function assertTrustedSender(event: IpcMainInvokeEvent): void {
 function requiredController(): LifecycleController {
   if (!controller) throw new Error('Lifecycle controller is unavailable.')
   return controller
+}
+
+function requiredCompanionHost(): PackagedCompanionHost {
+  if (!companionHost) throw new Error('Local setup controls are unavailable.')
+  return companionHost
 }
 
 function requiredDiagnostics(): LifecycleDiagnosticsService {

@@ -38,11 +38,7 @@ describe('Operations Desk', () => {
       expect.stringContaining('Reply requested'),
     ])
     expect(screen.getByText('partial')).toBeVisible()
-    expect(screen.getByText('unverified')).toBeVisible()
-    expect(screen.getByText('Set up locally when needed')).toBeVisible()
-    const ledgerCard = screen.getByText('Agent ledger').closest('article')
-    expect(ledgerCard).not.toBeNull()
-    expect(within(ledgerCard!).queryByRole('button', { name: /retry source/i })).not.toBeInTheDocument()
+    expect(screen.queryByText('Agent ledger')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /blocked release/i }))
     expect(onSelect).toHaveBeenCalledWith('attention:ticket:blocked')
@@ -64,7 +60,7 @@ describe('Operations Desk', () => {
     render(<OperationsDesk projection={{ items: [], sources: [], dayStatus: { queued: 0, resolved: 0, progress: null, label: 'No decisions queued' } }} onSelectedIdChange={() => undefined} loading error="Companion stopped" />)
     expect(screen.getByText(/loading companion-owned/i)).toBeVisible()
     expect(screen.getByRole('alert')).toHaveTextContent(/companion stopped/i)
-    expect(screen.getByText(/source coverage: unverified/i)).toBeVisible()
+    expect(screen.getByText(/no optional sources are configured yet/i)).toBeVisible()
     expect(screen.getByText(/no evidenced attention items/i)).toBeVisible()
   })
 

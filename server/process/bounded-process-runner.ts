@@ -8,6 +8,7 @@ export interface BoundedProcessRequest {
   signal: AbortSignal
   cwd?: string
   env?: NodeJS.ProcessEnv
+  stdin?: string
 }
 
 export type BoundedProcessResult =
@@ -30,7 +31,7 @@ export class NodeBoundedProcessRunner implements BoundedProcessRunner {
         env: request.env,
         windowsHide: true,
         shell: false,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: [request.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
       })
       const finish = (result: BoundedProcessResult) => {
         if (settled) return
@@ -63,8 +64,9 @@ export class NodeBoundedProcessRunner implements BoundedProcessRunner {
         if (target === 'stdout') stdout += chunk.toString('utf8')
         else stderr += chunk.toString('utf8')
       }
-      child.stdout.on('data', (chunk: Buffer) => append('stdout', chunk))
-      child.stderr.on('data', (chunk: Buffer) => append('stderr', chunk))
+      child.stdout?.on('data', (chunk: Buffer) => append('stdout', chunk))
+      child.stderr?.on('data', (chunk: Buffer) => append('stderr', chunk))
+      if (request.stdin !== undefined && child.stdin) { child.stdin.end(request.stdin) }
       child.once('error', (error: NodeJS.ErrnoException) => finish({ status: error.code === 'ENOENT' ? 'not-found' : 'failed' }))
       child.once('close', (code) => finish({ status: 'completed', exitCode: code ?? -1, stdout, stderr }))
     })

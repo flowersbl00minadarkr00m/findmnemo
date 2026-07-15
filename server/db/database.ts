@@ -4,7 +4,7 @@ import { dirname, isAbsolute } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { PlatformPathError, resolvePlatformPaths, type ResolvePlatformPathsInput } from '../platform/platform-paths.js'
 
-export const DATABASE_SCHEMA_VERSION = 6
+export const DATABASE_SCHEMA_VERSION = 12
 
 const MIGRATION_001 = `
 CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -186,6 +186,261 @@ INSERT OR IGNORE INTO usage_state(singleton_id,last_success_run_id,last_success_
 UPDATE app_meta SET value='6' WHERE key='schema_version';
 `
 
+const MIGRATION_007 = `
+CREATE TABLE IF NOT EXISTS project_folders (
+  id TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  canonical_path TEXT NOT NULL UNIQUE,
+  path_fingerprint TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('active','paused')),
+  detected_kind TEXT NOT NULL CHECK(detected_kind IN ('sdd','git','generic','unavailable')),
+  sdd_enrichment_enabled INTEGER NOT NULL CHECK(sdd_enrichment_enabled IN (0,1)),
+  last_checked_at TEXT,
+  last_success_at TEXT,
+  last_error_code TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS project_folders_fingerprint_idx ON project_folders(path_fingerprint);
+CREATE INDEX IF NOT EXISTS project_folders_state_idx ON project_folders(state, updated_at DESC);
+UPDATE app_meta SET value='7' WHERE key='schema_version';
+`
+
+const MIGRATION_008 = `
+CREATE TABLE IF NOT EXISTS ticket_status_events (
+  id TEXT PRIMARY KEY,
+  ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  from_status TEXT,
+  to_status TEXT NOT NULL,
+  occurred_at TEXT NOT NULL,
+  completion_at TEXT,
+  origin TEXT NOT NULL,
+  correlation_id TEXT
+);
+CREATE INDEX IF NOT EXISTS tickets_completion_idx ON tickets(status, completed_at DESC, id);
+CREATE INDEX IF NOT EXISTS ticket_status_events_ticket_time_idx ON ticket_status_events(ticket_id, occurred_at);
+UPDATE app_meta SET value='8' WHERE key='schema_version';
+`
+
+function applyMigration008(db: DatabaseSync): void {
+  const tickets = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='tickets'").get()
+  if (!tickets) {
+    db.prepare("UPDATE app_meta SET value='8' WHERE key='schema_version'").run()
+    return
+  }
+  const columns = db.prepare('PRAGMA table_info(tickets)').all() as Array<{ name: string }>
+  if (!columns.some((column) => column.name === 'completed_at')) db.exec('ALTER TABLE tickets ADD COLUMN completed_at TEXT;')
+  db.exec(MIGRATION_008)
+}
+
+const MIGRATION_009 = `
+CREATE TABLE IF NOT EXISTS routing_connections (
+  id TEXT PRIMARY KEY,
+  adapter_id TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+  auth_mode TEXT NOT NULL,
+  auth_state TEXT NOT NULL,
+  installed_version TEXT,
+  supported_range TEXT,
+  readiness_checked_at TEXT,
+  catalog_refreshed_at TEXT,
+  config_json TEXT NOT NULL DEFAULT '{}',
+  secret_ref TEXT
+);
+CREATE INDEX IF NOT EXISTS routing_connections_adapter_idx ON routing_connections(adapter_id, enabled);
+CREATE TABLE IF NOT EXISTS routing_connection_catalogs (
+  connection_id TEXT PRIMARY KEY REFERENCES routing_connections(id) ON DELETE CASCADE,
+  adapter_id TEXT NOT NULL,
+  adapter_version TEXT NOT NULL,
+  installed_version TEXT NOT NULL,
+  checked_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  source TEXT NOT NULL,
+  verification TEXT NOT NULL,
+  models_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS routing_policy_v3 (
+  singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1),
+  policy_version INTEGER NOT NULL CHECK(policy_version >= 0),
+  updated_at TEXT NOT NULL,
+  policy_json TEXT NOT NULL
+);
+UPDATE app_meta SET value='9' WHERE key='schema_version';
+`
+
+function applyMigration009(db: DatabaseSync): void {
+  db.exec(MIGRATION_009)
+  const receipts = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='routing_dispatch_receipts'").get()
+  if (!receipts) return
+  const columns = new Set((db.prepare('PRAGMA table_info(routing_dispatch_receipts)').all() as Array<{ name: string }>).map((column) => column.name))
+  const additions: Record<string, string> = {
+    requested_route_json: 'TEXT', actual_route_evidence_json: 'TEXT', fallback_profile_ids_json: "TEXT NOT NULL DEFAULT '[]'",
+    chain_id: 'TEXT', chain_depth: 'INTEGER NOT NULL DEFAULT 0', parent_dispatch_id: 'TEXT',
+  }
+  for (const [name, definition] of Object.entries(additions)) if (!columns.has(name)) db.exec(`ALTER TABLE routing_dispatch_receipts ADD COLUMN ${name} ${definition}`)
+}
+
+const MIGRATION_010 = `
+CREATE TABLE IF NOT EXISTS agent_activity_integrations (
+  id TEXT PRIMARY KEY,
+  agent_kind TEXT NOT NULL CHECK(agent_kind IN ('codex-cli','claude-code','pi')),
+  adapter_version TEXT NOT NULL,
+  installed_version TEXT,
+  enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+  configured INTEGER NOT NULL CHECK(configured IN (0,1)),
+  support_level TEXT NOT NULL CHECK(support_level IN ('unsupported','detection-only','manual','snapshot','automatic-partial','automatic-task-terminal')),
+  freshness_profile TEXT NOT NULL,
+  heartbeat_seconds INTEGER,
+  freshness_window_seconds INTEGER NOT NULL CHECK(freshness_window_seconds > 0),
+  last_attempt_at TEXT,
+  last_event_at TEXT,
+  last_success_at TEXT,
+  last_failure_code TEXT,
+  retained_last_success INTEGER NOT NULL DEFAULT 0 CHECK(retained_last_success IN (0,1)),
+  secret_ref TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS agent_activity_integrations_agent_idx ON agent_activity_integrations(agent_kind,enabled);
+
+CREATE TABLE IF NOT EXISTS agent_assignments (
+  assignment_key TEXT PRIMARY KEY,
+  integration_id TEXT NOT NULL REFERENCES agent_activity_integrations(id) ON DELETE RESTRICT,
+  agent_kind TEXT NOT NULL CHECK(agent_kind IN ('codex-cli','claude-code','pi')),
+  generation INTEGER NOT NULL CHECK(generation >= 1),
+  ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE RESTRICT,
+  last_applied_sequence INTEGER NOT NULL CHECK(last_applied_sequence >= 1),
+  last_event_id TEXT NOT NULL,
+  reported_state TEXT NOT NULL CHECK(reported_state IN ('active','waiting','blocked','needs-action','completed','failed','cancelled')),
+  safe_summary TEXT NOT NULL,
+  summary_source TEXT NOT NULL CHECK(summary_source IN ('explicit-user','explicit-agent-tool','claude-task-subject','placeholder')),
+  summary_owner TEXT NOT NULL DEFAULT 'source' CHECK(summary_owner IN ('source','human')),
+  project_mapping_state TEXT NOT NULL CHECK(project_mapping_state IN ('approved-project','unassigned','needs-review')),
+  project_id TEXT,
+  project_review_token TEXT,
+  project_owner TEXT NOT NULL DEFAULT 'source' CHECK(project_owner IN ('source','human')),
+  model_label TEXT,
+  last_observed_at TEXT NOT NULL,
+  fresh_until TEXT,
+  terminal_at TEXT,
+  terminal_evidence_kind TEXT,
+  terminal_outcome TEXT CHECK(terminal_outcome IN ('completed','failed','cancelled')),
+  source_update_policy TEXT NOT NULL DEFAULT 'follow' CHECK(source_update_policy IN ('follow','paused','detached','closed')),
+  record_version INTEGER NOT NULL DEFAULT 1 CHECK(record_version >= 1),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS agent_assignments_integration_state_idx ON agent_assignments(integration_id,reported_state,last_observed_at DESC);
+CREATE INDEX IF NOT EXISTS agent_assignments_ticket_idx ON agent_assignments(ticket_id);
+
+CREATE TABLE IF NOT EXISTS agent_assignment_events (
+  event_id TEXT PRIMARY KEY,
+  assignment_key TEXT NOT NULL REFERENCES agent_assignments(assignment_key) ON DELETE CASCADE,
+  sequence INTEGER NOT NULL CHECK(sequence >= 1),
+  event_kind TEXT NOT NULL,
+  reported_state TEXT,
+  observed_at TEXT NOT NULL,
+  received_at TEXT NOT NULL,
+  reason_code TEXT,
+  evidence_kind TEXT NOT NULL,
+  evidence_key TEXT,
+  safe_summary TEXT,
+  summary_source TEXT,
+  project_mapping_state TEXT,
+  project_id TEXT,
+  project_review_token TEXT,
+  apply_state TEXT NOT NULL CHECK(apply_state IN ('applied','pending-gap')),
+  receipt_code TEXT,
+  UNIQUE(assignment_key,sequence)
+);
+CREATE INDEX IF NOT EXISTS agent_assignment_events_assignment_idx ON agent_assignment_events(assignment_key,sequence);
+CREATE INDEX IF NOT EXISTS agent_assignment_events_received_idx ON agent_assignment_events(received_at DESC);
+
+CREATE TABLE IF NOT EXISTS agent_activity_snapshots (
+  request_id TEXT PRIMARY KEY,
+  integration_id TEXT NOT NULL REFERENCES agent_activity_integrations(id) ON DELETE CASCADE,
+  mode TEXT NOT NULL CHECK(mode IN ('current-session','next-interaction','explicit-report')),
+  requested_at TEXT NOT NULL,
+  coverage_started_at TEXT,
+  coverage_ended_at TEXT,
+  assignments_observed INTEGER NOT NULL DEFAULT 0 CHECK(assignments_observed >= 0),
+  gap_count INTEGER NOT NULL DEFAULT 0 CHECK(gap_count >= 0),
+  state TEXT NOT NULL CHECK(state IN ('requested','waiting','complete','failed')),
+  completed_at TEXT,
+  failure_code TEXT
+);
+
+CREATE TABLE IF NOT EXISTS agent_project_reviews (
+  review_token TEXT PRIMARY KEY,
+  integration_id TEXT NOT NULL REFERENCES agent_activity_integrations(id) ON DELETE CASCADE,
+  assignment_key TEXT,
+  state TEXT NOT NULL CHECK(state IN ('pending','resolved','dismissed')),
+  candidate_count INTEGER NOT NULL DEFAULT 0 CHECK(candidate_count >= 0),
+  resolved_project_id TEXT,
+  created_at TEXT NOT NULL,
+  resolved_at TEXT,
+  FOREIGN KEY(assignment_key) REFERENCES agent_assignments(assignment_key) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS agent_project_reviews_state_idx ON agent_project_reviews(state,created_at);
+
+UPDATE app_meta SET value='10' WHERE key='schema_version';
+`
+
+function applyMigration010(db: DatabaseSync): void {
+  db.exec(MIGRATION_010)
+  if (!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='configured_sources'").get()) return
+  db.prepare(`INSERT OR IGNORE INTO configured_sources(source_id,adapter_kind,adapter_version,enabled,policy,config_json)
+    VALUES('agent-activity','agent-activity','1.0.0',0,'review','{}')`).run()
+}
+
+const MIGRATION_011 = `
+CREATE INDEX IF NOT EXISTS agent_assignment_events_pending_idx ON agent_assignment_events(assignment_key,apply_state,sequence);
+UPDATE app_meta SET value='11' WHERE key='schema_version';
+`
+
+function applyMigration011(db: DatabaseSync): void {
+  const events = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_assignment_events'").get()
+  if (!events) {
+    db.prepare("UPDATE app_meta SET value='11' WHERE key='schema_version'").run()
+    return
+  }
+  const columns = new Set((db.prepare('PRAGMA table_info(agent_assignment_events)').all() as Array<{ name: string }>).map((column) => column.name))
+  const additions: Record<string, string> = {
+    terminal_evidence_kind: 'TEXT',
+    terminal_outcome: 'TEXT',
+    model_label: 'TEXT',
+  }
+  for (const [name, definition] of Object.entries(additions)) if (!columns.has(name)) db.exec(`ALTER TABLE agent_assignment_events ADD COLUMN ${name} ${definition}`)
+  db.exec(MIGRATION_011)
+}
+
+const MIGRATION_012 = `
+CREATE TABLE IF NOT EXISTS agent_activity_runtime (
+  singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1),
+  capture_enabled INTEGER NOT NULL DEFAULT 0 CHECK(capture_enabled IN (0,1)),
+  rollout_state TEXT NOT NULL DEFAULT 'disabled' CHECK(rollout_state IN ('disabled','enabled','rolling-back')),
+  last_retention_at TEXT,
+  last_retention_failure_code TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+INSERT OR IGNORE INTO agent_activity_runtime(singleton_id,capture_enabled,rollout_state,created_at,updated_at)
+VALUES(1,0,'disabled',datetime('now'),datetime('now'));
+CREATE INDEX IF NOT EXISTS agent_assignment_events_retention_idx ON agent_assignment_events(apply_state,received_at DESC,event_id DESC);
+CREATE INDEX IF NOT EXISTS agent_assignments_activity_page_idx ON agent_assignments(terminal_outcome,last_observed_at DESC,assignment_key DESC);
+UPDATE app_meta SET value='12' WHERE key='schema_version';
+`
+
+function applyMigration012(db: DatabaseSync): void {
+  db.exec(MIGRATION_012)
+  const hasConfiguredSources = Boolean(db.prepare("SELECT 1 AS present FROM sqlite_master WHERE type='table' AND name='configured_sources'").get())
+  const hasIntegrations = Boolean(db.prepare("SELECT 1 AS present FROM sqlite_master WHERE type='table' AND name='agent_activity_integrations'").get())
+  const configured = hasConfiguredSources && Boolean(db.prepare("SELECT 1 AS present FROM configured_sources WHERE source_id='agent-activity' AND enabled=1").get())
+  const integration = hasIntegrations && Boolean(db.prepare('SELECT 1 AS present FROM agent_activity_integrations WHERE enabled=1 AND configured=1 LIMIT 1').get())
+  if (configured || integration) db.prepare("UPDATE agent_activity_runtime SET capture_enabled=1,rollout_state='enabled',updated_at=datetime('now') WHERE singleton_id=1").run()
+}
+
 export interface OpenDatabaseOptions {
   path?: string
   localAppData?: string
@@ -230,6 +485,12 @@ export async function openFindMnemoDatabase(options: OpenDatabaseOptions = {}): 
     if (currentVersion < 4) runTransaction(db, () => db.exec(MIGRATION_004))
     if (currentVersion < 5) runTransaction(db, () => db.exec(MIGRATION_005))
     if (currentVersion < 6) runTransaction(db, () => db.exec(MIGRATION_006))
+    if (currentVersion < 7) runTransaction(db, () => db.exec(MIGRATION_007))
+    if (currentVersion < 8) runTransaction(db, () => applyMigration008(db))
+    if (currentVersion < 9) runTransaction(db, () => applyMigration009(db))
+    if (currentVersion < 10) runTransaction(db, () => applyMigration010(db))
+    if (currentVersion < 11) runTransaction(db, () => applyMigration011(db))
+    if (currentVersion < 12) runTransaction(db, () => applyMigration012(db))
     recoverInterruptedRuns(db)
   } catch (cause) {
     db.close()
@@ -259,6 +520,12 @@ function recoverInterruptedRuns(db: DatabaseSync): void {
   }
   if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='usage_refresh_runs'").get()) {
     db.prepare("UPDATE usage_refresh_runs SET state='failed',error_code='USAGE_REFRESH_INTERRUPTED',finished_at=COALESCE(finished_at,datetime('now')) WHERE state IN ('requested','detecting','collecting','normalizing','committing')").run()
+  }
+  if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_activity_snapshots'").get()) {
+    db.prepare("UPDATE agent_activity_snapshots SET state='failed',failure_code='SNAPSHOT_INTERRUPTED',completed_at=COALESCE(completed_at,datetime('now')) WHERE state='requested'").run()
+  }
+  if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_activity_runtime'").get()) {
+    db.prepare("UPDATE agent_activity_runtime SET rollout_state='disabled',updated_at=datetime('now') WHERE rollout_state='rolling-back' AND capture_enabled=0").run()
   }
 }
 

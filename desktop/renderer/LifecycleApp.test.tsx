@@ -19,6 +19,8 @@ describe('LifecycleApp first run', () => {
       checkForUpdates: vi.fn(), downloadUpdate: vi.fn(), cancelUpdateDownload: vi.fn(), activateUpdate: vi.fn(),
       inspectExistingState: vi.fn().mockResolvedValue({ state: 'fresh', databasePresent: false, credentialPresent: false, lifecycleSettingsPresent: true, listener: 'none', backupRequired: false, retainedLocation: '%LOCALAPPDATA%\\FindMnemo' }), adoptExistingState: vi.fn(),
       prepareUninstall: vi.fn(), launchUninstaller: vi.fn(),
+      pairingSnapshot: vi.fn().mockResolvedValue({ state: 'unavailable', guidance: 'Start FindMnemo.' }), refreshPairingCode: vi.fn(),
+      chooseProjectFolders: vi.fn(), commitProjectFolders: vi.fn(),
     } satisfies FindMnemoLifecycleBridge
     render(<LifecycleApp />)
     expect(await screen.findByRole('heading', { name: /your operational data stays/i })).toBeVisible()

@@ -15,6 +15,10 @@ const LIFECYCLE_IPC = Object.freeze({
   inspectExistingState: 'findmnemo:lifecycle:inspect-existing-state', adoptExistingState: 'findmnemo:lifecycle:adopt-existing-state',
   prepareUninstall: 'findmnemo:lifecycle:prepare-uninstall',
   launchUninstaller: 'findmnemo:lifecycle:launch-uninstaller',
+  pairingSnapshot: 'findmnemo:lifecycle:pairing-snapshot',
+  refreshPairingCode: 'findmnemo:lifecycle:refresh-pairing-code',
+  chooseProjectFolders: 'findmnemo:lifecycle:choose-project-folders',
+  commitProjectFolders: 'findmnemo:lifecycle:commit-project-folders',
 })
 
 const bridge: FindMnemoLifecycleBridge = Object.freeze({
@@ -36,6 +40,10 @@ const bridge: FindMnemoLifecycleBridge = Object.freeze({
   adoptExistingState: () => ipcRenderer.invoke(LIFECYCLE_IPC.adoptExistingState),
   prepareUninstall: (choice: UninstallChoice, secondConfirmed: boolean) => ipcRenderer.invoke(LIFECYCLE_IPC.prepareUninstall, choice, secondConfirmed),
   launchUninstaller: () => ipcRenderer.invoke(LIFECYCLE_IPC.launchUninstaller),
+  pairingSnapshot: () => ipcRenderer.invoke(LIFECYCLE_IPC.pairingSnapshot),
+  refreshPairingCode: () => ipcRenderer.invoke(LIFECYCLE_IPC.refreshPairingCode),
+  chooseProjectFolders: () => ipcRenderer.invoke(LIFECYCLE_IPC.chooseProjectFolders),
+  commitProjectFolders: (previewId: string, warningsConfirmed: boolean) => ipcRenderer.invoke(LIFECYCLE_IPC.commitProjectFolders, previewId, warningsConfirmed),
   openTrustedTarget: (target: TrustedTarget) => ipcRenderer.invoke(LIFECYCLE_IPC.openTrustedTarget, target),
   subscribe: (listener: (state: LifecycleState) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, state: LifecycleState) => listener(state)

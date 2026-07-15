@@ -31,6 +31,15 @@ describe('PairingService', () => {
     const service = new PairingService(() => new Date('2026-07-10T00:00:00.000Z'))
     const nonce = service.issueLocalBootstrap()
     expect(service.exchangeLocalBootstrap(nonce, 'local_browser_nonce_123456').ok).toBe(true)
-    expect(service.exchangeLocalBootstrap(nonce, 'local_browser_nonce_123456')).toEqual({ ok: false, code: 'PAIRING_CODE_INVALID' })
+    expect(service.exchangeLocalBootstrap(nonce, 'local_browser_nonce_123456')).toEqual({ ok: false, code: 'PAIRING_CODE_USED' })
+  })
+
+  it('exposes an in-memory snapshot and invalidates it when a new code is issued', () => {
+    const service = new PairingService(() => new Date('2026-07-10T00:00:00.000Z'))
+    const first = service.issueCode()
+    expect(service.pairingSnapshot()).toEqual({ code: first, expiresAt: '2026-07-10T00:05:00.000Z' })
+    const second = service.refreshPairingCode()
+    expect(second.code).not.toBe(first)
+    expect(service.exchange(first, 'browser_nonce_1234567890')).toEqual({ ok: false, code: 'PAIRING_CODE_INVALID' })
   })
 })

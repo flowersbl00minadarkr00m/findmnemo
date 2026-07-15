@@ -1,6 +1,8 @@
-import { createHash, randomUUID } from 'node:crypto'
-import type { OperationalRoutingPolicy, RoutingClassificationSource, RoutingDispatchReceiptDto, RoutingExecutionProfile, RoutingRequestOverride } from '../../shared/companion-contract.js'
-import type { DestinationAdapter } from './adapter-contract.js'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import type { OperationalRoutingPolicy, OperationalRoutingPolicyV3, RouteEvidenceDto, RoutingClassificationSource, RoutingConnectionDto, RoutingDispatchChainDto, RoutingDispatchReceiptDto, RoutingExecutionProfile, RoutingProfileV3, RoutingRequestOverride } from '../../shared/companion-contract.js'
+import type { AdapterConnectionContext, DestinationAdapter, DestinationExecutionEvent } from './adapter-contract.js'
+import { RoutingConnectionRepository } from './connection-repository.js'
+import { ProjectContextResolver } from './project-context-resolver.js'
 import { validateOperationalPolicyForCompanion } from './routing-policy.js'
 import { RoutingRepository } from './routing-repository.js'
 
@@ -14,6 +16,8 @@ export interface DispatchRequest {
   task: string
   timeoutMs?: number
   retryOfReceiptId?: string
+  projectFolderId?: string
+  chain?: RoutingDispatchChainDto
 }
 
 export interface DispatchResult {
@@ -36,19 +40,26 @@ export class DispatchService {
   private readonly results = new Map<string, { text: string; expiresAt: number }>()
   private readonly retryableRequests = new Map<string, { request: DispatchRequest; expiresAt: number }>()
   private readonly repository: RoutingRepository
+  private readonly connections?: RoutingConnectionRepository
+  private readonly projectContexts?: ProjectContextResolver
   private readonly clock: () => Date
 
-  constructor(repository: RoutingRepository, adapters: readonly DestinationAdapter[], clock: () => Date = () => new Date()) {
+  constructor(repository: RoutingRepository, adapters: readonly DestinationAdapter[], clock: () => Date = () => new Date(), options: { connections?: RoutingConnectionRepository; projectContexts?: ProjectContextResolver } = {}) {
     this.repository = repository
     this.clock = clock
     this.adapters = new Map(adapters.map((adapter) => [adapter.manifest.adapterId, adapter]))
+    this.connections = options.connections
+    this.projectContexts = options.projectContexts
     this.repository.recoverInterruptedDispatches(this.clock().toISOString())
   }
 
   async dispatch(request: DispatchRequest): Promise<DispatchResult> {
     if (!request.idempotencyKey || !request.task || request.task.length > 200_000) return { disposition: 'failed', reasonCode: 'INVALID_REQUEST' }
+    if ((request.chain?.depth ?? 0) >= 1) return { disposition: 'failed', reasonCode: 'recursive-dispatch-blocked' }
     const existing = this.repository.findDispatchByIdempotencyKey(request.idempotencyKey)
     if (existing) return this.existing(existing)
+    const policyV3 = this.repository.readPolicyV3()
+    if (policyV3 && this.connections && this.projectContexts) return this.dispatchV3(policyV3, request)
     const policy = this.repository.readPolicy()
     if (!policy || !validateOperationalPolicyForCompanion(policy).valid) return { disposition: 'unavailable', reasonCode: 'ROUTING_POLICY_INVALID' }
     const normalizedRequest = { ...request, capabilityIds: normalizeCapabilityIds(policy, request.capabilityIds) }
@@ -99,7 +110,103 @@ export class DispatchService {
     } finally { clearTimeout(timer); this.active.delete(receipt.id) }
   }
 
+  private async dispatchV3(policy: OperationalRoutingPolicyV3, request: DispatchRequest): Promise<DispatchResult> {
+    const normalizedCapabilityIds = normalizeCapabilityIdsV3(policy, request.capabilityIds)
+    const selection = selectProfilesV3(policy, normalizedCapabilityIds, request)
+    if (selection.decision) return { disposition: 'decision-required', reasonCode: selection.reasonCode }
+    if (!selection.profiles.length) return { disposition: selection.decision ? 'decision-required' : 'unavailable', reasonCode: selection.reasonCode }
+
+    const nowMs = this.clock().getTime()
+    const eligible = selection.profiles.map((profile) => this.qualifyV3(profile, nowMs)).filter((value): value is QualifiedV3Profile => value !== null)
+    if (!eligible.length) return { disposition: 'unavailable', reasonCode: 'NO_READY_EXECUTABLE_ROUTE' }
+
+    const prior = request.retryOfReceiptId ? this.repository.getDispatchReceipt(request.retryOfReceiptId) : null
+    if (request.retryOfReceiptId && (!prior || !['failed', 'timed-out', 'cancelled'].includes(prior.state))) return { disposition: 'failed', reasonCode: 'RETRY_NOT_ALLOWED' }
+    const selected = eligible[0]
+    const createdAt = this.clock().toISOString()
+    const chain = request.chain ?? { id: randomUUID(), depth: 0, parentDispatchId: null }
+    const requestedRoute = routeEvidence(selected.profile, selected.connection, 'requested-unverified')
+    const created = this.repository.createDispatchReceiptV2({
+      id: randomUUID(), idempotencyKey: request.idempotencyKey, generation: (prior?.generation ?? 0) + 1, priorReceiptId: prior?.id ?? null,
+      origin: request.origin, capabilityIds: normalizedCapabilityIds, classificationSource: request.classificationSource, policyVersion: policy.policyVersion,
+      requestedProfileSnapshot: snapshotV3(selected.profile, selected.connection, selection.assignmentBehavior), requestedRoute, fallbackFromProfileIds: [], chain,
+      createdAt, requestHash: hash(request.task),
+    })
+    if (!created.created) return this.existing(this.repository.getDispatchReceipt(created.receipt.id)!)
+    let receipt = this.repository.getDispatchReceipt(created.receipt.id)!
+    this.retryableRequests.set(receipt.id, { request: { ...request, origin: { ...request.origin }, capabilityIds: [...request.capabilityIds], override: structuredClone(request.override) }, expiresAt: nowMs + 5 * 60_000 })
+    const controller = new AbortController()
+    this.active.set(receipt.id, controller)
+    const timer = setTimeout(() => controller.abort('timeout'), Math.max(100, Math.min(10 * 60_000, request.timeoutMs ?? 120_000)))
+    const fallbackFromProfileIds: string[] = []
+    let lastFailure = 'DESTINATION_FAILED'
+    try {
+      receipt = this.repository.updateDispatchReceipt(receipt.id, { state: 'accepted', acceptedAt: this.clock().toISOString() })
+      this.repository.updateDispatchReceiptV2(receipt.id, { outcome: 'accepted' })
+      for (const candidate of eligible) {
+        if (candidate !== selected) fallbackFromProfileIds.push(eligible[eligible.indexOf(candidate) - 1].profile.id)
+        receipt = this.repository.updateDispatchReceipt(receipt.id, { state: 'running', startedAt: receipt.startedAt ?? this.clock().toISOString(), failureCode: null })
+        this.repository.updateDispatchReceiptV2(receipt.id, { outcome: 'running', fallbackFromProfileIds, startedAt: receipt.startedAt })
+        try {
+          const result = await this.executeV3Candidate(candidate, request, chain, controller.signal)
+          if (Buffer.byteLength(result.output, 'utf8') > 1_000_000) throw new Error('DESTINATION_OUTPUT_LIMIT')
+          const finishedAt = this.clock().toISOString()
+          const actualEvidence = destinationEvidence(candidate, result.actualRoute)
+          receipt = this.repository.updateDispatchReceipt(receipt.id, { state: 'completed', finishedAt, resultHash: hash(result.output), actualRoute: legacyActualRoute(actualEvidence) })
+          this.repository.updateDispatchReceiptV2(receipt.id, { outcome: 'completed', actualRoute: actualEvidence, fallbackFromProfileIds, finishedAt, failureCode: null })
+          this.results.set(receipt.id, { text: result.output, expiresAt: this.clock().getTime() + 5 * 60_000 })
+          return { disposition: 'completed', receipt, output: result.output }
+        } catch (cause) {
+          if (controller.signal.aborted) throw cause
+          lastFailure = boundedCode(cause)
+        }
+      }
+      throw new Error(lastFailure)
+    } catch (cause) {
+      const timedOut = controller.signal.reason === 'timeout'
+      const cancelled = controller.signal.aborted && !timedOut
+      const state = timedOut ? 'timed-out' : cancelled ? 'cancelled' : 'failed'
+      const failureCode = timedOut ? 'DESTINATION_TIMEOUT' : cancelled ? 'DISPATCH_CANCELLED' : boundedCode(cause)
+      const finishedAt = this.clock().toISOString()
+      receipt = this.repository.updateDispatchReceipt(receipt.id, { state, returnState: 'return-unavailable', finishedAt, failureCode })
+      this.repository.updateDispatchReceiptV2(receipt.id, { outcome: state, fallbackFromProfileIds, finishedAt, failureCode })
+      return { disposition: state, receipt, reasonCode: failureCode }
+    } finally { clearTimeout(timer); this.active.delete(receipt.id) }
+  }
+
+  private qualifyV3(profile: RoutingProfileV3, nowMs: number): QualifiedV3Profile | null {
+    if (profile.kind !== 'executable' || !profile.enabled || !profile.connectionId || profile.readiness.state !== 'ready' || !profile.readiness.expiresAt || Date.parse(profile.readiness.expiresAt) <= nowMs) return null
+    const connection = this.connections?.get(profile.connectionId)
+    if (!connection?.enabled || connection.authState !== 'ready' || !connection.readinessCheckedAt) return null
+    const catalog = this.connections?.readCatalog(connection.id)
+    if (!catalog || Date.parse(catalog.expiresAt) <= nowMs || !catalog.models.some((model) => model.modelId === profile.modelId && (profile.effort === null || model.supportedEfforts.includes(profile.effort)))) return null
+    const adapter = this.adapters.get(connection.adapterId)
+    return adapter?.executeConnectionProfile ? { profile, connection, adapter } : null
+  }
+
+  private async executeV3Candidate(candidate: QualifiedV3Profile, request: DispatchRequest, chain: RoutingDispatchChainDto, signal: AbortSignal): Promise<{ output: string; actualRoute: ActualExecutionRoute }> {
+    const projectContext = await this.projectContexts!.resolve(request.projectFolderId)
+    const context: AdapterConnectionContext = { connection: candidate.connection, projectContext, dispatchChain: { id: chain.id, depth: 1, token: randomBytes(32).toString('base64url') } }
+    let output: string | undefined
+    let actualRoute: ActualExecutionRoute | undefined
+    for await (const event of candidate.adapter.executeConnectionProfile!(candidate.profile, request.task, context, signal)) {
+      if (event.type === 'failed') throw new Error(event.code)
+      actualRoute = event.actualRoute
+      if (event.type === 'completed') output = event.text
+    }
+    if (output === undefined || !actualRoute) throw new Error('DESTINATION_RESULT_MALFORMED')
+    return { output, actualRoute }
+  }
+
   preflight(request: Pick<DispatchRequest, 'capabilityIds' | 'classificationSource' | 'classificationAmbiguous' | 'override'>): RoutingPreflightDecision {
+    const policyV3 = this.repository.readPolicyV3()
+    if (policyV3 && this.connections) {
+      const normalized = normalizeCapabilityIdsV3(policyV3, request.capabilityIds)
+      const selection = selectProfilesV3(policyV3, normalized, request)
+      const qualified = selection.profiles.map((profile) => this.qualifyV3(profile, this.clock().getTime())).find(Boolean)
+      if (qualified) return { disposition: selection.assignmentBehavior === 'send-automatically' || request.override.mode === 'include' ? 'auto-dispatch-eligible' : 'recommend', reasonCode: selection.reasonCode, policyVersion: policyV3.policyVersion, profile: snapshotV3(qualified.profile, qualified.connection, selection.assignmentBehavior) }
+      return { disposition: selection.decision ? 'decision-required' : 'unavailable', reasonCode: selection.reasonCode, policyVersion: policyV3.policyVersion }
+    }
     const policy = this.repository.readPolicy()
     if (!policy || !validateOperationalPolicyForCompanion(policy).valid) return { disposition: 'unavailable', reasonCode: 'ROUTING_POLICY_INVALID', policyVersion: null }
     if (request.override.mode === 'self') return { disposition: 'self-handled', reasonCode: 'EXPLICIT_SELF_OVERRIDE', policyVersion: policy.policyVersion }
@@ -192,4 +299,60 @@ function normalizeCapabilityIds(policy: OperationalRoutingPolicy, requested: rea
 
 function normalizeCapabilityValue(value: string): string {
   return value.normalize('NFKD').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+}
+
+type ActualExecutionRoute = Extract<DestinationExecutionEvent, { actualRoute: unknown }>['actualRoute']
+interface QualifiedV3Profile { profile: RoutingProfileV3; connection: RoutingConnectionDto; adapter: DestinationAdapter }
+
+function normalizeCapabilityIdsV3(policy: OperationalRoutingPolicyV3, requested: readonly string[]): string[] {
+  const byNormalizedValue = new Map<string, string>()
+  for (const capability of policy.capabilities) {
+    byNormalizedValue.set(normalizeCapabilityValue(capability.id), capability.id)
+    byNormalizedValue.set(normalizeCapabilityValue(capability.label), capability.id)
+  }
+  return [...new Set(requested.map((value) => {
+    const normalized = normalizeCapabilityValue(value)
+    const aliasTarget = CAPABILITY_ALIASES[normalized]
+    return byNormalizedValue.get(normalized) ?? (aliasTarget && policy.capabilities.some((capability) => capability.id === aliasTarget) ? aliasTarget : value)
+  }))]
+}
+
+function selectProfilesV3(policy: OperationalRoutingPolicyV3, capabilityIds: string[], request: Pick<DispatchRequest, 'classificationAmbiguous' | 'override'>): { profiles: RoutingProfileV3[]; decision: boolean; reasonCode: string; assignmentBehavior: 'ask-before-send' | 'send-automatically' } {
+  if (request.override.mode === 'self') return { profiles: [], decision: true, reasonCode: 'EXPLICIT_SELF_OVERRIDE', assignmentBehavior: 'ask-before-send' }
+  if (request.classificationAmbiguous || capabilityIds.length === 0) return { profiles: [], decision: true, reasonCode: 'AMBIGUOUS_CLASSIFICATION', assignmentBehavior: 'ask-before-send' }
+  const assignment = policy.assignments.find((value) => capabilityIds.includes(value.capabilityId)) ?? policy.assignments.find((value) => value.capabilityId === 'default')
+  if (!assignment) return { profiles: [], decision: false, reasonCode: 'NO_ASSIGNMENT', assignmentBehavior: 'ask-before-send' }
+  const excluded = request.override.mode === 'exclude' ? new Set(request.override.profileIds) : new Set<string>()
+  let profiles = assignment.profileOrder.map((id) => policy.profiles.find((profile) => profile.id === id)).filter((profile): profile is RoutingProfileV3 => Boolean(profile)).filter((profile) => !excluded.has(profile.id))
+  if (request.override.mode === 'include') {
+    const includedProfileId = request.override.profileId
+    profiles = profiles.filter((profile) => profile.id === includedProfileId)
+  }
+  if (!profiles.length) return { profiles: [], decision: false, reasonCode: 'NO_EXACT_PROFILE', assignmentBehavior: assignment.behavior }
+  const decision = assignment.behavior === 'ask-before-send' && request.override.mode !== 'include'
+  return { profiles, decision, reasonCode: decision ? 'ASK_BEFORE_SEND' : 'ELIGIBLE', assignmentBehavior: assignment.behavior }
+}
+
+function snapshotV3(profile: RoutingProfileV3, connection: RoutingConnectionDto, behavior: 'ask-before-send' | 'send-automatically') {
+  return { profileId: profile.id, destinationAdapterId: connection.adapterId, destinationInstanceId: connection.id, providerId: profile.providerId, modelId: profile.modelId, effort: profile.effort, behavior: behavior === 'send-automatically' ? 'auto-exact' as const : 'recommend' as const }
+}
+
+function routeEvidence(profile: RoutingProfileV3, connection: RoutingConnectionDto, verification: RouteEvidenceDto['verification']): RouteEvidenceDto {
+  return { connectionId: connection.id, adapterId: connection.adapterId, providerId: profile.providerId, modelId: profile.modelId, effort: profile.effort, verification }
+}
+
+function destinationEvidence(candidate: QualifiedV3Profile, actual: ActualExecutionRoute): RouteEvidenceDto {
+  const supported = new Set(candidate.adapter.manifest.qualification?.actualRouteEvidence ?? [])
+  return {
+    connectionId: candidate.connection.id,
+    adapterId: candidate.connection.adapterId,
+    providerId: supported.has('provider') ? actual.providerId : null,
+    modelId: supported.has('model') ? actual.modelId : null,
+    effort: supported.has('effort') ? actual.effort : null,
+    verification: supported.size ? 'destination-reported' : 'requested-unverified',
+  }
+}
+
+function legacyActualRoute(evidence: RouteEvidenceDto) {
+  return evidence.adapterId && evidence.connectionId && evidence.modelId ? { destinationAdapterId: evidence.adapterId, destinationInstanceId: evidence.connectionId, providerId: evidence.providerId, modelId: evidence.modelId, effort: evidence.effort } : null
 }

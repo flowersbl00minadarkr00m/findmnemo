@@ -56,6 +56,45 @@ describe('FindMnemo database', () => {
     reopened.close()
   })
 
+  it('keeps legacy completion unknown and round-trips explicit completion events without using updated time', async () => {
+    const { path, database } = await temporaryDatabase()
+    const repository = new OperationalRepository(database.db)
+    repository.saveTicket({ ...ticket('legacy-done'), status: 'done', updatedAt: '2026-07-10T12:00:00.000Z', payload: { title: 'Legacy done' } })
+    repository.saveTicket({ ...ticket('explicit-done'), status: 'done', completedAt: '2026-07-10T11:00:00.000Z', payload: { title: 'Explicit done', completionProvenance: 'findmnemo-lifecycle-v1' } })
+    repository.appendTicketStatusEvent({ id: 'event-1', ticketId: 'explicit-done', fromStatus: 'in-progress', toStatus: 'done', occurredAt: '2026-07-10T11:00:00.000Z', completionAt: '2026-07-10T11:00:00.000Z', origin: 'companion', correlationId: 'transition-1' })
+    expect(repository.getTicket('legacy-done')).toMatchObject({ completedAt: null, updatedAt: '2026-07-10T12:00:00.000Z' })
+    expect(repository.getTicket('explicit-done')).toMatchObject({ completedAt: '2026-07-10T11:00:00.000Z' })
+    expect(repository.listTicketStatusEvents('explicit-done')).toEqual([expect.objectContaining({ id: 'event-1', completionAt: '2026-07-10T11:00:00.000Z' })])
+    expect(database.db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name IN ('tickets_completion_idx','ticket_status_events_ticket_time_idx') ORDER BY name").all()).toHaveLength(2)
+    database.close()
+    const reopened = await openFindMnemoDatabase({ path })
+    expect(new OperationalRepository(reopened.db).getTicket('legacy-done')?.completedAt).toBeNull()
+    reopened.close()
+  })
+
+  it('adds the privacy-minimized agent activity tables and disabled source identity additively', async () => {
+    const { database } = await temporaryDatabase()
+    const tables = database.db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (
+      'agent_activity_integrations','agent_assignments','agent_assignment_events','agent_activity_snapshots','agent_project_reviews','agent_activity_runtime'
+    ) ORDER BY name`).all() as Array<{ name: string }>
+    expect(tables.map((row) => row.name)).toEqual([
+      'agent_activity_integrations',
+      'agent_activity_runtime',
+      'agent_activity_snapshots',
+      'agent_assignment_events',
+      'agent_assignments',
+      'agent_project_reviews',
+    ])
+    expect(database.db.prepare("SELECT source_id,enabled,policy FROM configured_sources WHERE source_id='agent-activity'").get())
+      .toEqual({ source_id: 'agent-activity', enabled: 0, policy: 'review' })
+    expect(database.db.prepare("SELECT source_id FROM configured_sources WHERE source_id='agent-ledger'").get()).toBeUndefined()
+    expect(database.db.prepare('SELECT capture_enabled,rollout_state FROM agent_activity_runtime WHERE singleton_id=1').get()).toEqual({ capture_enabled: 0, rollout_state: 'disabled' })
+    expect(database.db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='agent_assignment_events_retention_idx'").get()).toEqual({ name: 'agent_assignment_events_retention_idx' })
+    expect(database.db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='agent_assignments_activity_page_idx'").get()).toEqual({ name: 'agent_assignments_activity_page_idx' })
+    expect(database.db.prepare("SELECT value FROM app_meta WHERE key='schema_version'").get()).toEqual({ value: String(DATABASE_SCHEMA_VERSION) })
+    database.close()
+  })
+
   it('reuses the resolved default path across rebuild-style reopen and rejects relative overrides', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'findmnemo-stable-root-'))
     cleanup.push(directory)

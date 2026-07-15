@@ -49,4 +49,21 @@ describe('ExistingStateAdoptionService', () => {
     await expect(new InstallEventCoordinator(adoption, repair).repairPreservingData()).resolves.toMatchObject({ state: 'already-adopted', databasePresent: true })
     expect(repair.repairApplicationFiles).toHaveBeenCalledOnce(); expect(repair.repairLifecycleRegistration).toHaveBeenCalledOnce()
   })
+
+  it('migrates the activity feature flag without losing enabled configuration and recovers interrupted snapshots safely', async () => {
+    const dataRoot = await root(); const path = join(dataRoot, 'findmnemo.db')
+    const current = await openFindMnemoDatabase({ path })
+    current.db.prepare(`INSERT INTO agent_activity_integrations(id,agent_kind,adapter_version,installed_version,enabled,configured,support_level,freshness_profile,freshness_window_seconds,secret_ref,created_at,updated_at)
+      VALUES('auto:codex-cli','codex-cli','1.0.0','0.144.3',1,1,'automatic-partial','hook-observed',900,'owned-ref','2026-07-14T00:00:00.000Z','2026-07-14T00:00:00.000Z')`).run()
+    current.db.prepare(`INSERT INTO agent_activity_snapshots(request_id,integration_id,mode,requested_at,state)
+      VALUES('interrupted','auto:codex-cli','current-session','2026-07-14T00:00:00.000Z','requested')`).run()
+    current.db.exec('DROP TABLE agent_activity_runtime; DROP INDEX IF EXISTS agent_assignment_events_retention_idx')
+    current.db.prepare("UPDATE app_meta SET value='11' WHERE key='schema_version'").run(); current.close()
+
+    const migrated = await openFindMnemoDatabase({ path })
+    expect(migrated.db.prepare('SELECT capture_enabled,rollout_state FROM agent_activity_runtime WHERE singleton_id=1').get()).toEqual({ capture_enabled: 1, rollout_state: 'enabled' })
+    expect(migrated.db.prepare("SELECT enabled,configured,secret_ref FROM agent_activity_integrations WHERE id='auto:codex-cli'").get()).toEqual({ enabled: 1, configured: 1, secret_ref: 'owned-ref' })
+    expect(migrated.db.prepare("SELECT state,failure_code FROM agent_activity_snapshots WHERE request_id='interrupted'").get()).toEqual({ state: 'failed', failure_code: 'SNAPSHOT_INTERRUPTED' })
+    migrated.close()
+  })
 })

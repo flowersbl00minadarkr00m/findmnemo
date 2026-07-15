@@ -76,6 +76,7 @@ export interface AttentionSourceStatus {
   truthState: AttentionTruthState
   detail: string
   lastSuccessAt?: string
+  recoveryAction?: 'retry-source' | 'open-settings'
 }
 
 export interface AttentionDayStatus {
@@ -348,6 +349,7 @@ export interface Ticket {
   decisionLog: DecisionLogEntry[]
   createdAt: string
   updatedAt: string
+  completedAt?: string | null
   origin?: TicketOrigin
   generatedKind?: GeneratedTicketKind
   projectProgressId?: string
@@ -363,6 +365,11 @@ export interface Ticket {
   review?: ReviewRecord
   receiptRequired?: boolean
   receiptIds?: string[]
+  activityState?: 'active' | 'waiting' | 'blocked' | 'needs-action' | 'completed' | 'failed' | 'cancelled'
+  projectId?: string | null
+  projectMappingState?: 'approved-project' | 'unassigned' | 'needs-review'
+  summaryOwner?: 'source' | 'human'
+  projectOwner?: 'source' | 'human'
 }
 
 export interface AgentActivity {

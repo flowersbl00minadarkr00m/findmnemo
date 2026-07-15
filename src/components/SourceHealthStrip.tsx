@@ -10,18 +10,19 @@ const STATE_TONE: Record<AttentionTruthState, string> = {
   fictional: 'border-memory/40 text-memory',
 }
 
-export function SourceHealthStrip({ sources, onRetry }: { sources: readonly AttentionSourceStatus[]; onRetry?: (sourceId: string) => void }) {
-  if (sources.length === 0) {
+export function SourceHealthStrip({ sources, onRetry, onOpenSettings }: { sources: readonly AttentionSourceStatus[]; onRetry?: (sourceId: string) => void; onOpenSettings?: () => void }) {
+  const configured = sources.filter((source) => source.enabled !== false)
+  if (configured.length === 0) {
     return (
       <div className="rounded-sm border border-line bg-paper/60 px-3 py-2 text-xs text-mut" role="status">
-        Source coverage: unverified. Run MnemoSync when a companion source is available.
+        No optional sources are configured yet. Add one from Data &amp; Privacy when you want FindMnemo to track it.
       </div>
     )
   }
 
   return (
     <section aria-label="Source coverage" className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-      {sources.map((source) => (
+      {configured.map((source) => (
         <article key={source.id} className={`rounded-sm border bg-paper/70 px-3 py-2 ${STATE_TONE[source.truthState]}`}>
           <div className="flex items-center justify-between gap-2">
             <span className="truncate text-xs font-semibold text-ink">{source.label}</span>
@@ -31,9 +32,14 @@ export function SourceHealthStrip({ sources, onRetry }: { sources: readonly Atte
           {source.enabled === false && (
             <p className="mt-2 text-[10px] font-mono uppercase tracking-[0.08em] text-mut">Set up locally when needed</p>
           )}
-          {onRetry && source.enabled !== false && source.truthState !== 'current' && source.truthState !== 'fictional' && (
+          {onRetry && source.recoveryAction === 'retry-source' && source.enabled !== false && source.truthState !== 'current' && source.truthState !== 'fictional' && (
             <button type="button" onClick={() => onRetry(source.id)} className="mt-2 text-[10px] font-mono uppercase tracking-[0.08em] underline underline-offset-2">
               Retry source
+            </button>
+          )}
+          {onOpenSettings && source.recoveryAction === 'open-settings' && (
+            <button type="button" onClick={onOpenSettings} className="mt-2 text-[10px] font-mono uppercase tracking-[0.08em] underline underline-offset-2">
+              Review agent tracking
             </button>
           )}
         </article>

@@ -12,11 +12,12 @@ interface Props {
   highlightId?: string | null
   onOpenDetail?: (id: string) => void
   allTickets?: Ticket[]
+  columns?: TicketStatus[]
 }
 
 const COLUMNS: TicketStatus[] = ['todo', 'in-progress', 'done', 'blocked']
 
-export function TicketBoard({ tickets, onStatusChange, onDelete, onAddNote, highlightId, onOpenDetail, allTickets }: Props) {
+export function TicketBoard({ tickets, onStatusChange, onDelete, onAddNote, highlightId, onOpenDetail, allTickets, columns = COLUMNS }: Props) {
   const [dragOver, setDragOver] = useState<TicketStatus | null>(null)
   const [dragging, setDragging] = useState(false)
 
@@ -30,7 +31,7 @@ export function TicketBoard({ tickets, onStatusChange, onDelete, onAddNote, high
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-      {COLUMNS.map((status) => {
+      {columns.map((status) => {
         const columnTickets = tickets.filter((t) => t.status === status)
         const isOver = dragOver === status
         return (

@@ -2,6 +2,7 @@ import { existsSync, renameSync, rmSync, statSync } from 'node:fs'
 import { appendFile, mkdir, readFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { SOURCE_IDS, type SourceId } from '../../shared/companion-contract.js'
+import type { AgentKind } from '../../shared/agent-activity-contract.js'
 
 const MAX_LOG_BYTES = 512 * 1024
 const ALLOWED_CODES = /^[A-Z][A-Z0-9_]{1,63}$/
@@ -16,6 +17,10 @@ export interface SafeLogEvent {
   sourceId?: SourceId
   runId?: string
   count?: number
+  agentKind?: AgentKind
+  adapterVersion?: string
+  activityOutcome?: 'applied' | 'duplicate' | 'gap' | 'conflict' | 'rejected'
+  reasonCode?: string
 }
 
 export class SafeLogger {
@@ -70,6 +75,10 @@ function normalize(input: SafeLogEvent): SafeLogEvent {
     ...(input.sourceId && SOURCE_IDS.includes(input.sourceId) ? { sourceId: input.sourceId } : {}),
     ...(typeof input.runId === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(input.runId) ? { runId: input.runId } : {}),
     ...(Number.isFinite(input.count) ? { count: Math.max(0, Number(input.count)) } : {}),
+    ...(input.agentKind === 'codex-cli' || input.agentKind === 'claude-code' || input.agentKind === 'pi' ? { agentKind: input.agentKind } : {}),
+    ...(typeof input.adapterVersion === 'string' && /^[A-Za-z0-9._-]{1,32}$/.test(input.adapterVersion) ? { adapterVersion: input.adapterVersion } : {}),
+    ...(input.activityOutcome && ['applied', 'duplicate', 'gap', 'conflict', 'rejected'].includes(input.activityOutcome) ? { activityOutcome: input.activityOutcome } : {}),
+    ...(typeof input.reasonCode === 'string' && ALLOWED_CODES.test(input.reasonCode) ? { reasonCode: input.reasonCode } : {}),
   }
 }
 
@@ -78,6 +87,8 @@ const STATIC_ROUTES = new Set([
   '/api/v1/pairing/session', '/api/v1/pairing/rotate', '/api/v1/sources', '/api/v1/reconciliation-runs',
   '/api/v1/gmail/status', '/api/v1/gmail/connect', '/api/v1/gmail/connection', '/api/v1/gmail/checks',
   '/api/v1/email/candidates', '/api/v1/tickets', '/api/v1/migration/legacy-tickets/preview', '/api/v1/migration/legacy-tickets/commit',
+  '/api/v1/agent-activity', '/api/v1/agent-activity/assignments', '/api/v1/agent-activity/integrations',
+  '/api/v1/agent-activity/project-candidates', '/api/v1/agent-activity/project-reviews',
 ])
 
 export function redactRoute(route: string): string {
@@ -90,5 +101,8 @@ export function redactRoute(route: string): string {
   if (/^\/api\/v1\/email\/candidates\/[^/]+\/decision$/.test(path)) return '/api/v1/email/candidates/:threadId/decision'
   if (/^\/api\/v1\/email\/candidates\/[^/]+\/ticket$/.test(path)) return '/api/v1/email/candidates/:threadId/ticket'
   if (/^\/api\/v1\/tickets\/[^/]+$/.test(path)) return '/api/v1/tickets/:ticketId'
+  if (/^\/api\/v1\/agent-activity\/assignments\/[^/]+$/.test(path)) return '/api/v1/agent-activity/assignments/:assignmentKey'
+  if (/^\/api\/v1\/agent-activity\/integrations\/[^/]+\/(?:enable|test|pause|reconnect|remove|snapshot)$/.test(path)) return '/api/v1/agent-activity/integrations/:integrationId/:action'
+  if (/^\/api\/v1\/agent-activity\/project-reviews\/[^/]+$/.test(path)) return '/api/v1/agent-activity/project-reviews/:reviewId'
   return path.startsWith('/api/v1/') ? '/api/v1/:unrecognized' : '/:non-api'
 }

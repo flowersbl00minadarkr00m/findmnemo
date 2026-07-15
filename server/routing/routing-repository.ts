@@ -1,16 +1,27 @@
 import type { DatabaseSync } from 'node:sqlite'
-import type { ActualRouteSnapshot, DestinationModelCatalogDto, OperationalPolicyMigrationPreview, OperationalRoutingPolicy, ProfileReadinessResultDto, RequestedProfileSnapshot, RoutingClassificationSource, RoutingDispatchReceiptDto, RoutingDispatchState, RoutingExecutionProfile, RoutingReturnState } from '../../shared/companion-contract.js'
+import type { ActualRouteSnapshot, DestinationModelCatalogDto, OperationalPolicyMigrationPreview, OperationalPolicyV3MigrationPreview, OperationalRoutingPolicy, OperationalRoutingPolicyV3, ProfileReadinessResultDto, RequestedProfileSnapshot, RouteEvidenceDto, RoutingClassificationSource, RoutingConnectionDto, RoutingDispatchChainDto, RoutingDispatchReceiptDto, RoutingDispatchReceiptV2Dto, RoutingDispatchState, RoutingExecutionProfile, RoutingReturnState } from '../../shared/companion-contract.js'
 import { assertPrivateBoundary } from '../db/operational-repository.js'
 import { validateOperationalPolicyForCompanion } from './routing-policy.js'
+import { validateRoutingPolicyV3 } from './routing-policy-v3.js'
 
 export type RoutingPolicyWriteResult =
   | { status: 'saved'; policy: OperationalRoutingPolicy }
   | { status: 'conflict'; current: OperationalRoutingPolicy | null }
 
+export type RoutingPolicyV3WriteResult =
+  | { status: 'saved'; policy: OperationalRoutingPolicyV3 }
+  | { status: 'conflict'; current: OperationalRoutingPolicyV3 | null }
+
 export interface CreateDispatchReceiptInput {
   id: string; idempotencyKey: string; generation: number; priorReceiptId: string | null
   origin: RoutingDispatchReceiptDto['origin']; capabilityIds: string[]; classificationSource: RoutingClassificationSource
   policyVersion: number; requestedProfileSnapshot: RequestedProfileSnapshot; createdAt: string; requestHash: string
+}
+
+export interface CreateDispatchReceiptV2Input extends CreateDispatchReceiptInput {
+  requestedRoute: RouteEvidenceDto
+  fallbackFromProfileIds: string[]
+  chain: RoutingDispatchChainDto
 }
 
 export class RoutingRepository {
@@ -32,6 +43,47 @@ export class RoutingRepository {
       defaultProfileOrder: JSON.parse(String(envelope.default_order_json)) as string[],
       capabilityOverrides: JSON.parse(String(envelope.overrides_json)) as OperationalRoutingPolicy['capabilityOverrides'],
     }
+  }
+
+  readPolicyV3(): OperationalRoutingPolicyV3 | null {
+    const row = this.db.prepare('SELECT policy_json FROM routing_policy_v3 WHERE singleton_id=1').get() as { policy_json?: string } | undefined
+    return row?.policy_json ? JSON.parse(row.policy_json) as OperationalRoutingPolicyV3 : null
+  }
+
+  compareAndSetPolicyV3(input: OperationalRoutingPolicyV3, expectedPolicyVersion: number | null, connections: readonly RoutingConnectionDto[]): RoutingPolicyV3WriteResult {
+    const validation = validateRoutingPolicyV3(input, connections)
+    if (!validation.valid || !validation.policy) throw new Error('ROUTING_POLICY_INVALID')
+    assertPrivateBoundary(input)
+    return this.transaction(() => {
+      const current = this.readPolicyV3()
+      if ((current?.policyVersion ?? null) !== expectedPolicyVersion) return { status: 'conflict', current }
+      const policy = { ...validation.policy!, policyVersion: (current?.policyVersion ?? 0) + 1 }
+      this.db.prepare(`INSERT INTO routing_policy_v3(singleton_id,policy_version,updated_at,policy_json) VALUES(1,?,?,?)
+        ON CONFLICT(singleton_id) DO UPDATE SET policy_version=excluded.policy_version,updated_at=excluded.updated_at,policy_json=excluded.policy_json`)
+        .run(policy.policyVersion, policy.updatedAt, JSON.stringify(policy))
+      return { status: 'saved', policy }
+    })
+  }
+
+  previewMigrationV3(preview: OperationalPolicyV3MigrationPreview, connections: readonly RoutingConnectionDto[]): OperationalPolicyV3MigrationPreview {
+    const current = this.readPolicyV3()
+    const policy = { ...preview.policy, policyVersion: (current?.policyVersion ?? 0) + 1 }
+    if (!preview.sourcePolicyRevision || !validateRoutingPolicyV3(policy, connections).valid) throw new Error('ROUTING_MIGRATION_INVALID')
+    return { ...preview, policy }
+  }
+
+  commitMigrationV3(preview: OperationalPolicyV3MigrationPreview, connections: readonly RoutingConnectionDto[], createdAt: string): OperationalRoutingPolicyV3 {
+    const normalized = this.previewMigrationV3(preview, connections)
+    const migrationId = `v3:${preview.sourcePolicyRevision}`
+    return this.transaction(() => {
+      const prior = this.db.prepare('SELECT result_json FROM routing_policy_migrations WHERE source_policy_revision=?').get(migrationId) as { result_json?: string } | undefined
+      if (prior?.result_json) return JSON.parse(prior.result_json) as OperationalRoutingPolicyV3
+      const current = this.readPolicyV3()
+      if (current) throw new Error('ROUTING_POLICY_EXISTS')
+      this.db.prepare('INSERT INTO routing_policy_v3(singleton_id,policy_version,updated_at,policy_json) VALUES(1,?,?,?)').run(normalized.policy.policyVersion, normalized.policy.updatedAt, JSON.stringify(normalized.policy))
+      this.db.prepare('INSERT INTO routing_policy_migrations(source_policy_revision,policy_version,result_json,created_at) VALUES(?,?,?,?)').run(migrationId, normalized.policy.policyVersion, JSON.stringify(normalized.policy), createdAt)
+      return normalized.policy
+    })
   }
 
   compareAndSetPolicy(input: OperationalRoutingPolicy, expectedPolicyVersion: number | null): RoutingPolicyWriteResult {
@@ -122,6 +174,38 @@ export class RoutingRepository {
     })
   }
 
+  createDispatchReceiptV2(input: CreateDispatchReceiptV2Input): { created: boolean; receipt: RoutingDispatchReceiptV2Dto } {
+    assertPrivateBoundary(input)
+    if (input.chain.depth < 0 || input.chain.depth > 1 || !input.chain.id || input.requestedRoute.verification !== 'requested-unverified') throw new Error('ROUTING_RECEIPT_INVALID')
+    const base = this.createDispatchReceipt(input)
+    if (base.created) {
+      this.db.prepare(`UPDATE routing_dispatch_receipts SET requested_route_json=?,fallback_profile_ids_json=?,chain_id=?,chain_depth=?,parent_dispatch_id=? WHERE id=?`)
+        .run(JSON.stringify(input.requestedRoute), JSON.stringify(input.fallbackFromProfileIds), input.chain.id, input.chain.depth, input.chain.parentDispatchId, input.id)
+    }
+    const receipt = this.getDispatchReceiptV2(base.receipt.id)
+    if (!receipt) throw new Error('ROUTING_RECEIPT_WRITE_FAILED')
+    return { created: base.created, receipt }
+  }
+
+  getDispatchReceiptV2(id: string): RoutingDispatchReceiptV2Dto | null {
+    const row = this.db.prepare('SELECT * FROM routing_dispatch_receipts WHERE id=?').get(id) as Record<string, unknown> | undefined
+    return row ? readReceiptV2(row) : null
+  }
+
+  updateDispatchReceiptV2(id: string, update: { outcome?: RoutingDispatchState; actualRoute?: RouteEvidenceDto | null; fallbackFromProfileIds?: string[]; startedAt?: string | null; finishedAt?: string | null; failureCode?: string | null }): RoutingDispatchReceiptV2Dto {
+    assertPrivateBoundary(update)
+    const current = this.getDispatchReceiptV2(id)
+    if (!current) throw new Error('ROUTING_RECEIPT_NOT_FOUND')
+    const next = {
+      ...current,
+      ...update,
+      timing: { ...current.timing, startedAt: update.startedAt === undefined ? current.timing.startedAt : update.startedAt, finishedAt: update.finishedAt === undefined ? current.timing.finishedAt : update.finishedAt },
+    }
+    this.db.prepare(`UPDATE routing_dispatch_receipts SET state=?,actual_route_evidence_json=?,fallback_profile_ids_json=?,started_at=?,finished_at=?,failure_code=? WHERE id=?`)
+      .run(next.outcome, next.actualRoute === null ? null : JSON.stringify(next.actualRoute), JSON.stringify(next.fallbackFromProfileIds), next.timing.startedAt, next.timing.finishedAt, next.failureCode, id)
+    return this.getDispatchReceiptV2(id) as RoutingDispatchReceiptV2Dto
+  }
+
   getDispatchReceipt(id: string): RoutingDispatchReceiptDto | null {
     const row = this.db.prepare('SELECT * FROM routing_dispatch_receipts WHERE id=?').get(id) as Record<string, unknown> | undefined
     return row ? readReceipt(row) : null
@@ -185,5 +269,20 @@ function readReceipt(row: Record<string, unknown>): RoutingDispatchReceiptDto {
     state: String(row.state) as RoutingDispatchState, returnState: String(row.return_state) as RoutingReturnState,
     createdAt: String(row.created_at), acceptedAt: row.accepted_at === null ? null : String(row.accepted_at), startedAt: row.started_at === null ? null : String(row.started_at), finishedAt: row.finished_at === null ? null : String(row.finished_at),
     failureCode: row.failure_code === null ? null : String(row.failure_code), requestHash: String(row.request_hash), resultHash: row.result_hash === null ? null : String(row.result_hash),
+  }
+}
+
+function readReceiptV2(row: Record<string, unknown>): RoutingDispatchReceiptV2Dto | null {
+  if (row.requested_route_json === null || row.requested_route_json === undefined || row.chain_id === null || row.chain_id === undefined) return null
+  return {
+    id: String(row.id),
+    policyVersion: Number(row.policy_version),
+    requestedRoute: JSON.parse(String(row.requested_route_json)) as RouteEvidenceDto,
+    actualRoute: row.actual_route_evidence_json === null ? null : JSON.parse(String(row.actual_route_evidence_json)) as RouteEvidenceDto,
+    fallbackFromProfileIds: JSON.parse(String(row.fallback_profile_ids_json)) as string[],
+    outcome: String(row.state) as RoutingDispatchState,
+    timing: { acceptedAt: row.accepted_at === null ? null : String(row.accepted_at), startedAt: row.started_at === null ? null : String(row.started_at), finishedAt: row.finished_at === null ? null : String(row.finished_at) },
+    failureCode: row.failure_code === null ? null : String(row.failure_code),
+    chain: { id: String(row.chain_id), depth: Number(row.chain_depth), parentDispatchId: row.parent_dispatch_id === null ? null : String(row.parent_dispatch_id) },
   }
 }

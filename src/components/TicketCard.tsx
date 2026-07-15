@@ -143,6 +143,14 @@ export function TicketCard({
         )}
       </div>
 
+      {ticket.activityState && (
+        <div className="flex min-w-0 flex-wrap gap-1.5 text-[10px] font-mono text-mut" aria-label={`Agent activity: ${ticket.activityState}`}>
+          <span className="rounded-sm border border-line px-1.5 py-0.5">Agent: {ticket.activityState.replace('-', ' ')}</span>
+          <span className="rounded-sm border border-line px-1.5 py-0.5">Project: {ticket.projectMappingState === 'approved-project' ? 'assigned' : ticket.projectMappingState === 'needs-review' ? 'needs review' : 'Unassigned'}</span>
+          {(ticket.summaryOwner === 'human' || ticket.projectOwner === 'human') && <span className="rounded-sm border border-memory/40 px-1.5 py-0.5 text-memory">Human fields protected</span>}
+        </div>
+      )}
+
       {ticket.description && (
         <p className="text-xs text-mut leading-relaxed line-clamp-3">{ticket.description}</p>
       )}

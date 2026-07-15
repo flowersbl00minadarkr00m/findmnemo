@@ -1,4 +1,4 @@
-import type { GmailCandidateDto, ReconciliationRunDto, ReconciliationSourceResultDto, SourceDescriptor } from '../../shared/companion-contract'
+import type { AgentActivityAssignmentSummaryDto, AgentActivityIntegrationDto, GmailCandidateDto, ReconciliationRunDto, ReconciliationSourceResultDto, SourceDescriptor } from '../../shared/companion-contract'
 import type {
   AttentionAction,
   AttentionBucket,
@@ -31,6 +31,8 @@ export interface AttentionProjectionInput {
   ticketState?: 'loading' | 'current' | 'stale' | 'error'
   gmailTruthState?: AttentionTruthState
   lastReconciliationSuccessAt?: string
+  agentAssignments?: readonly AgentActivityAssignmentSummaryDto[]
+  agentIntegrations?: readonly AgentActivityIntegrationDto[]
   fictional?: boolean
   now?: string | Date
 }
@@ -39,10 +41,11 @@ export function projectAttentionWorkspace(input: AttentionProjectionInput): Atte
   const now = input.now instanceof Date ? input.now : new Date(input.now ?? Date.now())
   const ticketTruth = input.fictional ? 'fictional' : truthFromTicketState(input.ticketState)
   const ticketMap = new Map(input.tickets.map((ticket) => [ticket.id, ticket]))
+  const assignmentMap = new Map((input.agentAssignments ?? []).map((assignment) => [assignment.ticketId, assignment]))
   const ranked: RankedAttentionItem[] = []
 
   for (const ticket of input.tickets) {
-    const item = projectTicket(ticket, ticketMap, ticketTruth, now)
+    const item = projectTicket(ticket, ticketMap, ticketTruth, now, assignmentMap.get(ticket.id))
     if (item) ranked.push(item)
   }
   for (const candidate of input.gmailCandidates ?? []) {
@@ -73,6 +76,7 @@ function projectTicket(
   tickets: Map<string, Ticket>,
   truthState: AttentionTruthState,
   now: Date,
+  assignment?: AgentActivityAssignmentSummaryDto,
 ): RankedAttentionItem | undefined {
   const recordRef = `ticket:${ticket.id}`
   const blockers = (ticket.blockedBy ?? []).map((id) => {
@@ -90,7 +94,31 @@ function projectTicket(
   let priorityReason: string
   let primaryAction: AttentionAction
 
-  if (ticket.status === 'blocked') {
+  if (assignment?.effectiveState === 'needs-action') {
+    rank = 0
+    bucket = 'needs-action'
+    priority = 'critical'
+    priorityReason = 'The agent reported that this assignment needs your action.'
+    primaryAction = action(recordRef, 'open-ticket', 'Review requested action')
+  } else if (assignment?.effectiveState === 'blocked') {
+    rank = 0
+    bucket = 'needs-action'
+    priority = 'critical'
+    priorityReason = 'The agent reported that this assignment is blocked.'
+    primaryAction = action(recordRef, 'open-ticket', 'Review blocker')
+  } else if (assignment?.effectiveState === 'stale') {
+    rank = 1
+    bucket = 'needs-action'
+    priority = 'high'
+    priorityReason = `Last reported ${activityStateLabel(assignment.retainedLastState)} before coverage became stale.`
+    primaryAction = action(recordRef, 'open-ticket', 'Review stale assignment')
+  } else if (assignment?.effectiveState === 'waiting') {
+    rank = 5
+    bucket = 'waiting'
+    priority = 'normal'
+    priorityReason = 'The agent reported that this assignment is waiting.'
+    primaryAction = action(recordRef, 'open-ticket', 'Review waiting work')
+  } else if (ticket.status === 'blocked') {
     rank = 0
     bucket = 'needs-action'
     priority = 'critical'
@@ -114,7 +142,7 @@ function projectTicket(
     priority = ticket.status === 'in-progress' ? 'normal' : 'low'
     priorityReason = ticket.status === 'in-progress' ? 'Work is in progress and remains open.' : 'Frontier work is ready for attention.'
     primaryAction = action(recordRef, 'open-ticket', 'Open ticket')
-  } else if (ticket.status === 'done' && isRecent(ticket.updatedAt, now)) {
+  } else if (ticket.status === 'done' && ticket.completedAt && isRecent(ticket.completedAt, now)) {
     rank = 6
     bucket = 'recently-resolved'
     priority = 'low'
@@ -131,16 +159,16 @@ function projectTicket(
     recordRef,
     title: ticket.title,
     summary: ticket.description,
-    sourceLabel: ticket.origin ? `Ticket · ${ticket.origin}` : 'Ticket',
+    sourceLabel: assignment ? `${assignment.agentLabel} activity` : ticket.origin ? `Ticket · ${ticket.origin}` : 'Ticket',
     ownerLabel: ticket.source,
     bucket,
     priority,
     priorityReason,
-    truthState,
+    truthState: assignment?.effectiveState === 'stale' ? 'stale' : assignment ? 'current' : truthState,
     updatedAt: ticket.updatedAt,
-    evidence,
+    evidence: assignment ? assignmentEvidence(evidence, assignment) : evidence,
     primaryAction,
-    secondaryActions: ticket.status === 'done' ? [] : [{ ...action(recordRef, 'change-status', 'Mark done'), targetStatus: 'done' }],
+    secondaryActions: ticket.status === 'done' || assignment ? [] : [{ ...action(recordRef, 'change-status', 'Mark done'), targetStatus: 'done' }],
   }
 }
 
@@ -297,7 +325,7 @@ function sourceItem(
 }
 
 function projectSourceStatuses(input: AttentionProjectionInput): AttentionSourceStatus[] {
-  return (input.reconciliationSources ?? []).map((source) => {
+  const reconciled = (input.reconciliationSources ?? []).map((source) => {
     const evidence = latestSourceEvidence(input, source.id)
     const result = evidence?.result
     const truthState = sourceTruth(result, evidence?.run, input.fictional === true)
@@ -308,8 +336,50 @@ function projectSourceStatuses(input: AttentionProjectionInput): AttentionSource
       truthState,
       detail: !source.enabled ? 'Optional source — not configured.' : result ? sourceCounts(result) : 'Not checked yet',
       ...(result?.state === 'checked' && evidence?.run.finishedAt ? { lastSuccessAt: evidence.run.finishedAt } : {}),
+      ...(!source.enabled ? {} : { recoveryAction: 'retry-source' as const }),
     }
   })
+  const agents = (input.agentIntegrations ?? []).map((integration): AttentionSourceStatus => ({
+    id: `agent-activity:${integration.id}`,
+    label: `${integration.label} activity`,
+    enabled: integration.enabled,
+    truthState: agentCoverageTruth(integration.coverageState),
+    detail: integration.retainedLastSuccess
+      ? `${integration.coverageExplanation} Retained last success${integration.lastSuccessAt ? ` from ${new Date(integration.lastSuccessAt).toLocaleString()}` : ''}.`
+      : integration.coverageExplanation,
+    ...(integration.lastSuccessAt ? { lastSuccessAt: integration.lastSuccessAt } : {}),
+    ...(['partial', 'stale', 'unavailable', 'unsupported'].includes(integration.coverageState) ? { recoveryAction: 'open-settings' as const } : {}),
+  }))
+  return [...reconciled, ...agents]
+}
+
+function assignmentEvidence(evidence: AttentionEvidence, assignment: AgentActivityAssignmentSummaryDto): AttentionEvidence {
+  const project = assignment.project.kind === 'approved-project' ? assignment.project.label : assignment.project.kind === 'needs-review' ? 'Needs review' : 'Unassigned'
+  return {
+    ...evidence,
+    availability: 'available',
+    refs: [
+      ...evidence.refs,
+      { label: 'Agent state', value: assignment.effectiveState, state: assignment.effectiveState === 'stale' ? 'unavailable' : 'available' },
+      { label: 'Last reported', value: `${assignment.retainedLastState} at ${assignment.lastObservedAt}`, state: 'available' },
+      { label: 'Project', value: project, state: assignment.project.kind === 'needs-review' ? 'missing' : 'available' },
+      { label: 'Field ownership', value: `summary: ${assignment.summaryOwner}; project: ${assignment.projectOwner}`, state: 'available' },
+      ...(assignment.terminalEvidence ? [{ label: 'Terminal evidence', value: assignment.terminalEvidence, state: 'available' as const }] : []),
+      ...(assignment.linkedTicketKind ? [{ label: 'SDD activity link', value: assignment.linkedTicketKind, state: 'available' as const }] : []),
+    ],
+  }
+}
+
+function activityStateLabel(state: AgentActivityAssignmentSummaryDto['retainedLastState']): string {
+  return state === 'needs-action' ? 'needs action' : state
+}
+
+function agentCoverageTruth(state: AgentActivityIntegrationDto['coverageState']): AttentionTruthState {
+  if (state === 'connected') return 'current'
+  if (state === 'stale') return 'stale'
+  if (state === 'partial') return 'partial'
+  if (state === 'unavailable' || state === 'unsupported') return 'disconnected'
+  return 'unverified'
 }
 
 function latestSourceEvidence(input: AttentionProjectionInput, sourceId: SourceDescriptor['id']): { run: ReconciliationRunDto; result: ReconciliationSourceResultDto } | undefined {

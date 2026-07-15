@@ -1,11 +1,11 @@
 import type { CompanionConnectionState } from '../../shared/companion-contract'
 
 const COPY: Record<CompanionConnectionState, { label: string; detail: string }> = {
-  'not-installed': { label: 'Companion not detected', detail: 'Start the local FindMnemo companion, then retry.' },
-  stopped: { label: 'Companion stopped', detail: 'Restart the companion and retry the identity check.' },
-  'permission-required': { label: 'Local network permission required', detail: 'Choose Connect to let this browser contact the loopback companion.' },
+  'not-installed': { label: 'FindMnemo is not running on this computer', detail: 'Open the installed FindMnemo app, then try again.' },
+  stopped: { label: 'FindMnemo is stopped', detail: 'Open the installed app and choose Start, then try again.' },
+  'permission-required': { label: 'Permission needed to connect this computer', detail: 'Choose Connect this computer. Your browser may ask to contact an app on this device.' },
   'permission-denied': { label: 'Local network permission denied', detail: 'Reset this site permission in the browser or use the local fallback.' },
-  'pairing-required': { label: 'Pairing required', detail: 'Enter the one-time code shown by the local companion.' },
+  'pairing-required': { label: 'Enter the one-time code', detail: 'Find the current code in the installed FindMnemo window. It works once and expires after five minutes.' },
   connected: { label: 'Companion connected', detail: 'Identity, paired session, and authenticated status are verified.' },
   stale: { label: 'Connection stale', detail: 'The last verified status is old. Retry before trusting operational counts.' },
   unsupported: { label: 'Hosted connection unsupported', detail: 'Open the local fallback at 127.0.0.1:3210/app.' },

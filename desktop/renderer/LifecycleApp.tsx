@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { AdoptionSnapshot, LifecycleDiagnosticReport, LifecycleState, SupportBundlePreview, UninstallChoice, UninstallPreview } from '../../shared/lifecycle-contract'
+import type { AdoptionSnapshot, CompanionPairingSnapshot, LifecycleDiagnosticReport, LifecycleState, ProjectFolderSelectionPreview, SupportBundlePreview, UninstallChoice, UninstallPreview } from '../../shared/lifecycle-contract'
 
 export function LifecycleApp() {
   const [state, setState] = useState<LifecycleState>()
@@ -13,12 +13,21 @@ export function LifecycleApp() {
   const [deleteConfirmed, setDeleteConfirmed] = useState(false)
   const [uninstallPreview, setUninstallPreview] = useState<UninstallPreview>()
   const [uninstallResult, setUninstallResult] = useState<string>()
+  const [pairing, setPairing] = useState<CompanionPairingSnapshot>()
+  const [copyResult, setCopyResult] = useState<string>()
+  const [folderPreview, setFolderPreview] = useState<ProjectFolderSelectionPreview>()
+  const [folderResult, setFolderResult] = useState<string>()
 
   useEffect(() => {
     void window.findMnemoLifecycle.snapshot().then(setState)
     void window.findMnemoLifecycle.inspectExistingState().then(setAdoption)
+    void window.findMnemoLifecycle.pairingSnapshot().then(setPairing)
     return window.findMnemoLifecycle.subscribe(setState)
   }, [])
+
+  useEffect(() => {
+    if (state?.companion.state === 'healthy') void window.findMnemoLifecycle.pairingSnapshot().then(setPairing)
+  }, [state?.companion.state])
 
   async function command(action: 'start' | 'stop' | 'restart') {
     setPending(true)
@@ -94,6 +103,29 @@ export function LifecycleApp() {
     if (!result.ok) setUninstallResult('The standard installed uninstaller is unavailable in this development package.')
   }
 
+  async function refreshPairingCode() {
+    setPairing(await window.findMnemoLifecycle.refreshPairingCode())
+    setCopyResult(undefined)
+  }
+
+  async function copyPairingCode() {
+    if (!pairing?.code) return
+    await navigator.clipboard.writeText(pairing.code)
+    setCopyResult('Code copied. It can be used once.')
+  }
+
+  async function chooseProjectFolders() {
+    setFolderResult(undefined)
+    setFolderPreview(await window.findMnemoLifecycle.chooseProjectFolders())
+  }
+
+  async function commitProjectFolders() {
+    if (!folderPreview?.previewId) return
+    const result = await window.findMnemoLifecycle.commitProjectFolders(folderPreview.previewId, folderPreview.confirmationRequired)
+    setFolderResult(result.committed ? `${result.folderIds.length} project folder${result.folderIds.length === 1 ? '' : 's'} connected.` : `Folders were not connected: ${result.errorCode}.`)
+    if (result.committed) setFolderPreview(undefined)
+  }
+
   if (state?.phase === 'first-run') return <main>
     <header><span className="fish">◀◉▶</span><div><p className="eyebrow">FINDMNEMO</p><h1>Set up your private companion</h1></div></header>
     <section className="status disclosure" aria-labelledby="privacy-heading">
@@ -119,6 +151,18 @@ export function LifecycleApp() {
       {state?.companion.errorCode && <p className="error">{state.companion.errorCode}: the companion was not reported healthy.</p>}
       <dl><div><dt>App</dt><dd>{state?.appVersion ?? '—'}</dd></div><div><dt>Protocol</dt><dd>{state?.protocolVersion ?? '—'}</dd></div><div><dt>Listener</dt><dd>{state?.companion.host ? `${state.companion.host}:${state.companion.port}` : 'stopped'}</dd></div></dl>
     </section>
+    {state?.companion.state === 'healthy' && <section className="status disclosure" aria-labelledby="connection-code-heading">
+      <p className="label">CONNECT A HOSTED BROWSER</p>
+      <h2 id="connection-code-heading">One-time connection code</h2>
+      {pairing?.state === 'ready' && pairing.code
+        ? <><p className="pairing-code" aria-label={`Connection code ${pairing.code.split('').join(' ')}`}>{pairing.code.slice(0, 4)} {pairing.code.slice(4)}</p><p>{pairing.guidance}</p><p>Expires {pairing.expiresAt ? new Date(pairing.expiresAt).toLocaleTimeString() : 'soon'}.</p></>
+        : <p>{pairing?.guidance ?? 'Preparing a one-time code...'}</p>}
+      <div className="links">
+        <button className="primary" disabled={!pairing?.code} onClick={() => void copyPairingCode()}>Copy code</button>
+        <button onClick={() => void refreshPairingCode()}>New code</button>
+      </div>
+      {copyResult && <p aria-live="polite">{copyResult}</p>}
+    </section>}
     {adoption && !['already-adopted', 'adopted', 'fresh'].includes(adoption.state) && <section className="status disclosure" aria-labelledby="adoption-heading">
       <p className="label">EXISTING LOCAL STATE</p><h2 id="adoption-heading">Adopt your current FindMnemo workspace</h2>
       <p>Operational data stays in {adoption.retainedLocation}; it is not moved or duplicated.</p>
@@ -138,6 +182,13 @@ export function LifecycleApp() {
       <button onClick={() => void window.findMnemoLifecycle.openTrustedTarget('hosted-app')}>Open FindMnemo</button>
       <button onClick={() => void window.findMnemoLifecycle.openTrustedTarget('local-app')}>Open local workspace</button>
     </section>
+    {state?.companion.state === 'healthy' && <section className="diagnostics" aria-labelledby="project-folders-heading">
+      <p className="label">OPTIONAL PROJECT TRACKING</p><h2 id="project-folders-heading">Connect project folders</h2>
+      <p>Choose one or several folders. FindMnemo checks only those folders. Their locations stay on this computer.</p>
+      <button disabled={pending} onClick={() => void chooseProjectFolders()}>Choose folders</button>
+      {folderPreview?.state === 'ready' && <div className="preview"><ul>{folderPreview.items.map((item, index) => <li key={`${item.label}-${index}`}><strong>{item.label}</strong> — {item.detectedKind}{item.warning ? ` — ${item.warning}` : ''}</li>)}</ul><button className="primary" onClick={() => void commitProjectFolders()}>{folderPreview.confirmationRequired ? 'Confirm and connect' : 'Connect folders'}</button></div>}
+      {folderResult && <p aria-live="polite">{folderResult}</p>}
+    </section>}
     {state?.disclosure.acceptedAt && <section className="preference">
       <label className="choice"><input type="checkbox" checked={state.startup.enabled} disabled={pending} onChange={(event) => void changeStartup(event.target.checked)} /> Start FindMnemo when I sign in to Windows</label>
       <p>Startup is user-controlled and currently <strong>{state.startup.enabled ? 'on' : 'off'}</strong>.</p>

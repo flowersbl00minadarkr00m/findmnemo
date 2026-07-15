@@ -20,6 +20,10 @@ files:
   - package.json
   - '!node_modules/@tokscale/**/*'
 extraResources:
+  - from: desktop/agent-activity/findmnemo-activity-entry.js
+    to: agent-activity/findmnemo-activity-entry.js
+  - from: desktop/agent-activity/findmnemo-activity-launch.cmd
+    to: agent-activity/findmnemo-activity-launch.cmd
   - from: node_modules/@tokscale/cli-win32-x64-msvc/bin/tokscale.exe
     to: tokscale/tokscale.exe
   - from: THIRD_PARTY_NOTICES.md

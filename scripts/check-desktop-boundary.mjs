@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
 
-const [main, preload, html, builder, contract, packageDocument, notices, tokscaleResolver] = await Promise.all([
+const [main, preload, html, builder, contract, packageDocument, notices, tokscaleResolver, activityInstaller, activitySanitizer, activityLauncher, activityReporterCommand, uninstall] = await Promise.all([
   readFile(new URL('../desktop/main.ts', import.meta.url), 'utf8'),
   readFile(new URL('../desktop/preload.cts', import.meta.url), 'utf8'),
   readFile(new URL('../desktop.html', import.meta.url), 'utf8'),
@@ -9,6 +9,11 @@ const [main, preload, html, builder, contract, packageDocument, notices, tokscal
   readFile(new URL('../package.json', import.meta.url), 'utf8'),
   readFile(new URL('../THIRD_PARTY_NOTICES.md', import.meta.url), 'utf8'),
   readFile(new URL('../server/usage/tokscale-executable.ts', import.meta.url), 'utf8'),
+  readFile(new URL('../desktop/agent-activity/integration-installer.ts', import.meta.url), 'utf8'),
+  readFile(new URL('../desktop/agent-activity/findmnemo-activity-entry.js', import.meta.url), 'utf8'),
+  readFile(new URL('../desktop/agent-activity/findmnemo-activity-launch.cmd', import.meta.url), 'utf8'),
+  readFile(new URL('../desktop/agent-activity/reporter-command.ts', import.meta.url), 'utf8'),
+  readFile(new URL('../desktop/lifecycle/uninstall.ts', import.meta.url), 'utf8'),
 ])
 
 const packageJson = JSON.parse(packageDocument)
@@ -45,6 +50,15 @@ const checks = [
   [builder.includes('node_modules/@tokscale/cli-win32-x64-msvc/bin/tokscale.exe') && builder.includes('to: tokscale/tokscale.exe'), 'Windows x64 package must include only its qualified Tokscale collector asset'],
   [builder.includes('THIRD_PARTY_NOTICES.md') && notices.includes('Tokscale 4.5.2') && notices.includes('MIT License') && notices.includes('Copyright (c) 2025 Junho Yeo'), 'Tokscale MIT notice must ship with the package'],
   [!tokscaleResolver.includes('process.env.PATH') && !/\b(?:npm|npx|pnpm|yarn|bun)\s+(?:install|add)\b/.test(tokscaleResolver), 'collector resolution must not trust ambient PATH or install packages at runtime'],
+  [activityInstaller.includes("const OWNER = 'findmnemo-agent-activity-v1'") && activityInstaller.includes('atomicWrite') && activityInstaller.includes('INTEGRATION_TARGET_NOT_OWNED'), 'agent activity setup must use owned markers, atomic writes, and scoped mutation'],
+  [!activityInstaller.includes('x-findmnemo-activity-token') && !activityInstaller.includes('activityTokenReference'), 'agent hook configuration must not embed the activity token'],
+  [builder.includes('findmnemo-activity-entry.js') && builder.includes('findmnemo-activity-launch.cmd'), 'Windows packages must include the owned activity sanitizer and lightweight launcher'],
+  [activityReporterCommand.includes('cscript.exe //nologo //E:JScript') && activityReporterCommand.includes('findmnemo-activity-entry.js'), 'packaged activity setup must invoke the fast owned sanitizer'],
+  [activitySanitizer.includes("['hook_event_name', 'session_id', 'model', 'generation', 'task_id', 'task_subject', 'notification_type']") && activitySanitizer.includes('parseTopLevelObject') && !/(?:transcript_path|last_assistant_message|tool_input)/i.test(activitySanitizer), 'activity sanitizer must parse only its closed safe-field allowlist'],
+  [activitySanitizer.includes("new ActiveXObject('WScript.Shell').Run(command, 0, false)") && activitySanitizer.includes('<NUL >NUL 2>&1') && !/(?:token|secret|credential)/i.test(activitySanitizer), 'activity sanitizer must detach all delivery handles without waiting or embedding credentials'],
+  [activityLauncher.includes('start "" /b "%ComSpec%"') && activityLauncher.includes('if "%~1"=="--deliver"') && activityLauncher.includes('FindMnemo Companion.exe') && !/(?:token|secret|credential)/i.test(activityLauncher), 'lightweight launcher must defer the packaged reporter behind a command-process hop without embedding credentials'],
+  [activityInstaller.includes('child.unref()') && !activityInstaller.includes('await new Promise<void>') && activityInstaller.includes('timeout: 1'), 'Pi and installed command hooks must use bounded fire-and-forget reporting'],
+  [uninstall.includes('removeLifecycleIntegrations') && uninstall.indexOf('removeLifecycleIntegrations') < uninstall.indexOf("join(this.dataRoot, 'updates')"), 'uninstall must remove owned integrations before touching retained data/cache'],
 ]
 
 for (const [condition, message] of checks) {

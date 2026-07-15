@@ -13,3 +13,7 @@ FindMnemo's five primary areas spell **MNEMO** and use plain-language labels:
 Old names remain searchable for one compatibility path: Dashboard opens My Day, Projects/SDD opens Next Actions, Model Routing opens Engines, Model Usage or Analytics opens the matching Metrics view, and Emails opens Outreach. The Sample workspace uses the same navigation but remains fictional, session-only, and unable to call operational data APIs.
 
 On narrow screens the sidebar starts collapsed. Each one-letter marker retains its full accessible label and tooltip; expanding it reveals the plain-language name and available count.
+
+## Completed work
+
+**Next Actions** has one **Active / Completed** switch. Completed work defaults to 30 days and supports 7 days, 90 days, 12 months, or a custom date range. Only explicit completion timestamps enter a range; older Done records without a reliable completion date are disclosed separately instead of receiving a guessed date. The Completed metric opens this same history and range.

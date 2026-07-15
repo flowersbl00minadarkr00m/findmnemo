@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import type { AttentionAction, AttentionItem, HomeView, MetricsView, Ticket, AgentActivity, View, LLMSource, ModelRoutingPolicy } from './types'
 import type { OperationalRepository } from './lib/operational-repository'
 import type { GmailSourceStatus } from './lib/operational-repository'
-import type { GmailCandidateDto, GmailCheckDto, ReconciliationRunDto, SourceDescriptor, SourceId, UsageQueryDto } from '../shared/companion-contract'
+import type { AgentActivityAssignmentSummaryDto, AgentActivityIntegrationDto, CompletedRangePreset, GmailCandidateDto, GmailCheckDto, ProjectFolderSummaryDto, ReconciliationRunDto, SourceDescriptor, SourceId, UsageQueryDto } from '../shared/companion-contract'
 import { pollReconciliationRun, recordReconciliationTelemetry } from './lib/reconciliation'
 import {
   MODEL_ROUTING_POLICY_CHANGED_EVENT,
@@ -23,6 +23,10 @@ import { CommandPalette } from './components/CommandPalette'
 import { FilterBar, type TicketFilters } from './components/FilterBar'
 import { TicketDetail } from './components/TicketDetail'
 import { LegacyMigrationPanel } from './components/LegacyMigrationPanel'
+import { CompletedWorkPanel } from './components/CompletedWorkPanel'
+import { loadCompletedWorkPreference, saveCompletedWorkPreference } from './lib/completed-work-preference'
+import { SourceSetup } from './components/SourceSetup'
+import { ActiveAssignmentsPanel } from './components/ActiveAssignmentsPanel'
 
 const Analytics = lazy(() => import('./components/Analytics').then((module) => ({ default: module.Analytics })))
 const DailyBrief = lazy(() => import('./components/DailyBrief').then((module) => ({ default: module.DailyBrief })))
@@ -48,6 +52,7 @@ function loadInitialRoutingPolicy(): RoutingPolicyState {
 }
 
 export default function App({ operationalRepository }: { operationalRepository: OperationalRepository }) {
+  const initialCompletedPreference = useMemo(() => loadCompletedWorkPreference(typeof window === 'undefined' ? undefined : window.localStorage), [])
   const [view, setView] = useState<View>(() => loadHomeViewPreference(typeof window === 'undefined' ? undefined : window.localStorage))
   const [tickets, setTickets] = useState<Ticket[]>([])
   const [operationalTicketState, setOperationalTicketState] = useState<'loading' | 'current' | 'stale' | 'error'>('loading')
@@ -73,6 +78,27 @@ export default function App({ operationalRepository }: { operationalRepository: 
   const [lastReconciliationSuccess, setLastReconciliationSuccess] = useState<string>()
   const [selectedAttentionId, setSelectedAttentionId] = useState<string>()
   const [chooseGmailThreadId, setChooseGmailThreadId] = useState<string>()
+  const [ticketMode, setTicketMode] = useState<'active' | 'completed'>(initialCompletedPreference.mode)
+  const [completedPreset, setCompletedPreset] = useState<CompletedRangePreset>(initialCompletedPreference.preset)
+  const [showSourceSetup, setShowSourceSetup] = useState<boolean | null>(null)
+  const [agentAssignments, setAgentAssignments] = useState<AgentActivityAssignmentSummaryDto[]>([])
+  const [agentAssignmentCursor, setAgentAssignmentCursor] = useState<string | null>(null)
+  const [agentIntegrations, setAgentIntegrations] = useState<AgentActivityIntegrationDto[]>([])
+  const [agentProjects, setAgentProjects] = useState<ProjectFolderSummaryDto[]>([])
+  const [agentActivityLoading, setAgentActivityLoading] = useState(false)
+  const [agentActivityError, setAgentActivityError] = useState<string>()
+
+  useEffect(() => { saveCompletedWorkPreference(window.localStorage, { mode: ticketMode, preset: completedPreset }) }, [completedPreset, ticketMode])
+
+  useEffect(() => {
+    let active = true
+    if (!operationalRepository.getOnboardingSnapshot) {
+      setShowSourceSetup(false)
+      return () => { active = false }
+    }
+    operationalRepository.getOnboardingSnapshot().then((snapshot) => { if (active) setShowSourceSetup(snapshot.needsSetup) }).catch(() => { if (active) setShowSourceSetup(false) })
+    return () => { active = false }
+  }, [operationalRepository])
 
   const refreshOperationalTickets = useCallback(async () => {
     setOperationalTicketState((state) => state === 'current' ? 'current' : 'loading')
@@ -90,6 +116,48 @@ export default function App({ operationalRepository }: { operationalRepository: 
   useEffect(() => {
     void refreshOperationalTickets()
   }, [refreshOperationalTickets])
+
+  const refreshAgentActivity = useCallback(async () => {
+    if (!operationalRepository.listAgentActivityAssignments) return
+    setAgentActivityLoading(true)
+    try {
+      const [page, integrations, projects] = await Promise.all([
+        operationalRepository.listAgentActivityAssignments({ scope: 'active', limit: 25 }),
+        operationalRepository.listAgentActivityIntegrations?.() ?? Promise.resolve([]),
+        operationalRepository.listProjectFolders?.() ?? Promise.resolve([]),
+      ])
+      setAgentAssignments(page.items)
+      setAgentAssignmentCursor(page.nextCursor)
+      setAgentIntegrations(integrations)
+      setAgentProjects(projects)
+      setAgentActivityError(undefined)
+    } catch (cause) { setAgentActivityError(cause instanceof Error ? cause.message : 'Agent activity is unavailable.') }
+    finally { setAgentActivityLoading(false) }
+  }, [operationalRepository])
+
+  useEffect(() => { void refreshAgentActivity() }, [refreshAgentActivity])
+
+  const loadMoreAgentActivity = useCallback(async () => {
+    if (!agentAssignmentCursor || !operationalRepository.listAgentActivityAssignments) return
+    setAgentActivityLoading(true)
+    try {
+      const page = await operationalRepository.listAgentActivityAssignments({ scope: 'active', limit: 25, cursor: agentAssignmentCursor })
+      setAgentAssignments((current) => [...new Map([...current, ...page.items].map((item) => [item.id, item])).values()])
+      setAgentAssignmentCursor(page.nextCursor)
+      setAgentActivityError(undefined)
+    } catch (cause) { setAgentActivityError(cause instanceof Error ? cause.message : 'More assignments could not be loaded.') }
+    finally { setAgentActivityLoading(false) }
+  }, [agentAssignmentCursor, operationalRepository])
+
+  const updateAgentAssignment = useCallback(async (assignmentId: string, input: Parameters<NonNullable<OperationalRepository['updateAgentActivityAssignment']>>[1]) => {
+    if (!operationalRepository.updateAgentActivityAssignment) throw new Error('Assignment controls are unavailable.')
+    const updated = await operationalRepository.updateAgentActivityAssignment(assignmentId, input)
+    setAgentAssignments((current) => updated.sourceUpdatePolicy === 'closed' || updated.terminalOutcome
+      ? current.filter((item) => item.id !== updated.id)
+      : current.map((item) => item.id === updated.id ? updated : item))
+    await refreshOperationalTickets()
+    return updated
+  }, [operationalRepository, refreshOperationalTickets])
 
   const refreshOperationalEmails = useCallback(async () => {
     if (!operationalRepository?.listEmailCandidates) return
@@ -403,7 +471,9 @@ export default function App({ operationalRepository }: { operationalRepository: 
     ticketState: operationalTicketState,
     gmailTruthState: gmailError ? 'disconnected' : gmailSourceStatus?.lastSuccessAt ? 'current' : 'unverified',
     lastReconciliationSuccessAt: lastReconciliationSuccess,
-  }), [gmailCandidates, gmailError, gmailSourceStatus?.lastSuccessAt, lastReconciliationSuccess, operationalTicketState, reconciliationRun, reconciliationRuns, reconciliationSources, ticketsWithGenerated])
+    agentAssignments,
+    agentIntegrations,
+  }), [agentAssignments, agentIntegrations, gmailCandidates, gmailError, gmailSourceStatus?.lastSuccessAt, lastReconciliationSuccess, operationalTicketState, reconciliationRun, reconciliationRuns, reconciliationSources, ticketsWithGenerated])
   const selectedAttentionItem = attentionProjection.items.find((item) => item.id === selectedAttentionId)
   const selectedAttentionTicket = selectedAttentionItem?.kind === 'ticket'
     ? ticketsWithGenerated.find((ticket) => `ticket:${ticket.id}` === selectedAttentionItem.recordRef)
@@ -439,12 +509,13 @@ export default function App({ operationalRepository }: { operationalRepository: 
 
         <main className="flex-1 overflow-y-auto">
           <div className="max-w-[1480px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
-            {operationalTicketState !== 'current' && (
+            {showSourceSetup === false && operationalTicketState !== 'current' && (
               <div className="mb-4 rounded-sm border border-amber-400/40 bg-amber-400/10 px-4 py-3 text-sm text-amber-200" role="status">
                 Ticket state: {operationalTicketState}. {operationalTicketError ?? 'Loading companion-owned tickets.'}
                 <button type="button" onClick={() => void refreshOperationalTickets()} className="ml-3 underline">Retry</button>
               </div>
             )}
+            {showSourceSetup === null ? <ViewLoading /> : showSourceSetup ? <SourceSetup repository={operationalRepository} onNavigate={handleNavigate} onFinished={(run) => { setShowSourceSetup(false); if (run) { setReconciliationRun(run); void refreshOperationalTickets() } }} /> : <>
             <LegacyMigrationPanel repository={operationalRepository} onImported={() => void refreshOperationalTickets()} />
             <AnimatePresence initial={false}>
               <motion.div
@@ -471,6 +542,8 @@ export default function App({ operationalRepository }: { operationalRepository: 
                         error={operationalTicketState === 'error' ? operationalTicketError : reconciliationError}
                         homeView="operations"
                         onHomeViewChange={handleHomeViewChange}
+                        onOpenSettings={() => handleNavigate('settings')}
+                        activeAssignments={<ActiveAssignmentsPanel assignments={agentAssignments} projects={agentProjects} integrations={agentIntegrations} onUpdate={updateAgentAssignment} onLoadMore={() => void loadMoreAgentActivity()} hasMore={Boolean(agentAssignmentCursor)} loading={agentActivityLoading} error={agentActivityError} onOpenPrivacy={() => handleNavigate('settings')} />}
                       />
                   )}
                   {view === 'brief' && (
@@ -486,6 +559,12 @@ export default function App({ operationalRepository }: { operationalRepository: 
 
                   {view === 'tickets' && (
                     <div className="space-y-4">
+                      <div className="inline-flex rounded-sm border border-chrome-line bg-chrome p-1" role="tablist" aria-label="Ticket view">
+                        <button type="button" role="tab" aria-selected={ticketMode === 'active'} onClick={() => setTicketMode('active')} className={`rounded-sm px-4 py-2 text-xs font-semibold ${ticketMode === 'active' ? 'bg-sync text-white' : 'text-chrome-mut'}`}>Active</button>
+                        <button type="button" role="tab" aria-selected={ticketMode === 'completed'} onClick={() => setTicketMode('completed')} className={`rounded-sm px-4 py-2 text-xs font-semibold ${ticketMode === 'completed' ? 'bg-sync text-white' : 'text-chrome-mut'}`}>Completed</button>
+                      </div>
+                      {ticketMode === 'active' ? <>
+                      <ActiveAssignmentsPanel assignments={agentAssignments} projects={agentProjects} integrations={agentIntegrations} onUpdate={updateAgentAssignment} onLoadMore={() => void loadMoreAgentActivity()} hasMore={Boolean(agentAssignmentCursor)} loading={agentActivityLoading} error={agentActivityError} onOpenPrivacy={() => handleNavigate('settings')} />
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <FilterBar
                           filters={filters}
@@ -496,14 +575,16 @@ export default function App({ operationalRepository }: { operationalRepository: 
                         <NewTicketForm onCreate={handleCreate} />
                       </div>
                       <TicketBoard
-                        tickets={filteredTickets}
+                        tickets={filteredTickets.filter((ticket) => ticket.status !== 'done')}
                         allTickets={ticketsWithGenerated}
                         onStatusChange={handleStatusChange}
                         onDelete={handleDelete}
                         onAddNote={handleAddNote}
                         highlightId={highlightId}
                         onOpenDetail={handleOpenDetail}
+                        columns={['todo', 'in-progress', 'blocked']}
                       />
+                      </> : <CompletedWorkPanel repository={operationalRepository} initialPreset={completedPreset} onPresetChange={setCompletedPreset} onOpenTicket={handleOpenDetail} onReopen={async (id) => { await performStatusChange(id, 'todo') }} />}
                     </div>
                   )}
 
@@ -524,7 +605,7 @@ export default function App({ operationalRepository }: { operationalRepository: 
                   {(view === 'usage' || view === 'analytics') && (
                     <div className="space-y-4">
                       <div className="flex justify-end"><MetricsViewSwitch value={view} onChange={handleMetricsViewChange} /></div>
-                      {view === 'analytics' ? <Analytics tickets={tickets} /> : <UsageView repository={operationalRepository} initialFilters={usageInitialFilters} />}
+                      {view === 'analytics' ? <Analytics tickets={tickets} onOpenCompleted={(preset) => { setCompletedPreset(preset); setTicketMode('completed'); setView('tickets') }} /> : <UsageView repository={operationalRepository} initialFilters={usageInitialFilters} />}
                     </div>
                   )}
 
@@ -548,6 +629,7 @@ export default function App({ operationalRepository }: { operationalRepository: 
                 </Suspense>
               </motion.div>
             </AnimatePresence>
+            </>}
           </div>
         </main>
       </div>

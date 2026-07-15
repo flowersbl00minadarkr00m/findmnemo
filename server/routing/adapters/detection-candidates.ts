@@ -3,10 +3,7 @@ import { CommandDetector } from './command-detector.js'
 
 export function createDetectionOnlyAdapters(runner: RoutingProcessRunner, clock?: () => Date): DestinationAdapter[] {
   const candidates = [
-    ['codex-cli', 'Codex CLI', 'codex', 'Codex'],
-    ['claude-code', 'Claude Code', 'claude', 'Claude Code'],
     ['gemini-cli', 'Gemini CLI', 'gemini', 'Gemini CLI'],
-    ['ollama', 'Ollama', 'ollama', 'Ollama'],
   ] as const
   return candidates.map(([adapterId, displayName, executableLabel, product]) => new CommandDetector({
     adapterId, displayName, executableLabel, versionArgs: ['--version'], supportedRange: '*', testedCapabilities: ['detection'], controllability: 'detection-only',

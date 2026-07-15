@@ -161,7 +161,7 @@ describe('attention workspace projection', () => {
     const mixed = projectAttentionWorkspace({
       tickets: [
         ticket({ id: 'todo', title: 'Pending', status: 'todo' }),
-        ticket({ id: 'done', title: 'Resolved', status: 'done', updatedAt: '2026-07-12T08:00:00.000Z' }),
+        ticket({ id: 'done', title: 'Resolved', status: 'done', updatedAt: '2026-07-13T08:00:00.000Z', completedAt: '2026-07-12T08:00:00.000Z' }),
       ],
       ticketState: 'current',
       now,

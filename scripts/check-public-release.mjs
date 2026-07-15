@@ -15,12 +15,13 @@ const rules = [
   ['known-private-account', /hflowers45@gmail\.com/gi],
   ['username-path', /C:\\Users\\(?!fixture(?:\\|$)|user(?:\\|$))[^\\\r\n]+/gi],
   ['raw-content-marker', /RAW_(?:PRIVATE|LEDGER|GMAIL|PROMPT|RESPONSE|LOG)_/g],
+  ['agent-activity-private-canary', /AGENT_ACTIVITY_(?:PROMPT|RESPONSE|TRANSCRIPT|REASONING|CREDENTIAL|PATH|CONFIG|RAW_LOG|RETRY|CROSS_SITE|SAMPLE)_PRIVATE_CANARY/g],
 ]
 const prohibitedExtensions = new Set(['.db', '.sqlite', '.sqlite3', '.dpapi', '.pem', '.key', '.p12', '.pfx', '.log'])
 
 const positive = read('scripts/fixtures/public-release/sanitized.json')
 if (scanText(positive).length) throw new Error('PUBLIC_RELEASE_BOUNDARY_FAILED: sanitized positive fixture was rejected.')
-for (const fixture of ['credential.txt', 'runtime.db', 'raw.log']) {
+for (const fixture of ['credential.txt', 'runtime.db', 'raw.log', 'agent-activity.txt']) {
   const path = `${negativePrefix}${fixture}`
   if (scanFile(path).length === 0) throw new Error(`PUBLIC_RELEASE_BOUNDARY_FAILED: negative fixture ${fixture} was not rejected.`)
 }

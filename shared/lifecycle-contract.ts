@@ -37,6 +37,10 @@ export const LIFECYCLE_IPC = {
   adoptExistingState: 'findmnemo:lifecycle:adopt-existing-state',
   prepareUninstall: 'findmnemo:lifecycle:prepare-uninstall',
   launchUninstaller: 'findmnemo:lifecycle:launch-uninstaller',
+  pairingSnapshot: 'findmnemo:lifecycle:pairing-snapshot',
+  refreshPairingCode: 'findmnemo:lifecycle:refresh-pairing-code',
+  chooseProjectFolders: 'findmnemo:lifecycle:choose-project-folders',
+  commitProjectFolders: 'findmnemo:lifecycle:commit-project-folders',
 } as const
 
 export const TRUSTED_TARGETS = ['hosted-app', 'local-app', 'support-docs'] as const
@@ -96,6 +100,28 @@ export interface AdoptionSnapshot {
 }
 export type UninstallChoice = 'preserve-data' | 'remove-credentials' | 'delete-all-data'
 export interface UninstallPreview { planId: string; choice: UninstallChoice; expiresAt: string; removes: readonly string[]; retains: readonly string[]; secondConfirmationRequired: boolean }
+export interface CompanionPairingSnapshot {
+  state: 'ready' | 'unavailable'
+  code?: string
+  expiresAt?: string
+  guidance: string
+}
+
+export interface ProjectFolderSelectionItem {
+  label: string
+  detectedKind: 'sdd' | 'git' | 'generic' | 'unavailable'
+  relationship: 'new' | 'duplicate' | 'nested' | 'contains-existing'
+  warning: string | null
+  sddEnrichmentAvailable: boolean
+}
+export interface ProjectFolderSelectionPreview {
+  state: 'ready' | 'cancelled' | 'unavailable'
+  previewId?: string
+  expiresAt?: string
+  items: ProjectFolderSelectionItem[]
+  confirmationRequired: boolean
+  errorCode?: string
+}
 
 export interface FindMnemoLifecycleBridge {
   snapshot(): Promise<LifecycleState>
@@ -116,6 +142,10 @@ export interface FindMnemoLifecycleBridge {
   adoptExistingState(): Promise<AdoptionSnapshot>
   prepareUninstall(choice: UninstallChoice, secondConfirmed: boolean): Promise<UninstallPreview>
   launchUninstaller(): Promise<{ ok: boolean; errorCode?: string }>
+  pairingSnapshot(): Promise<CompanionPairingSnapshot>
+  refreshPairingCode(): Promise<CompanionPairingSnapshot>
+  chooseProjectFolders(): Promise<ProjectFolderSelectionPreview>
+  commitProjectFolders(previewId: string, warningsConfirmed: boolean): Promise<{ committed: boolean; folderIds: string[]; errorCode?: string }>
   openTrustedTarget(target: TrustedTarget): Promise<void>
   subscribe(listener: (state: LifecycleState) => void): () => void
 }

@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CompanionConnectionState, CompanionIdentityDto } from '../../shared/companion-contract'
 import {
   bootstrapLocalCompanion,
   deriveCompanionConnectionState,
   getCompanionIdentity,
   getCompanionStatus,
+  hasLocalBootstrapEvidence,
   pairCompanion,
   rotateCompanionSession,
   revokeCompanionSession,
@@ -22,16 +23,19 @@ export function OperationalOnboarding() {
   const [connectionState, setConnectionState] = useState<CompanionConnectionState>('permission-required')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string>()
+  const identityRef = useRef<CompanionIdentityDto | undefined>(undefined)
+  const localConnectAttemptedRef = useRef(false)
   const operationalRepository = useMemo(
     () => session ? createCompanionRepository(session) : undefined,
     [session],
   )
+  const localFallback = useMemo(() => hasLocalBootstrapEvidence(), [])
 
-  const verifyStatus = useCallback(async (nextSession: CompanionSession, nextIdentity = identity) => {
+  const verifyStatus = useCallback(async (nextSession: CompanionSession, nextIdentity?: CompanionIdentityDto) => {
     const nextStatus = await getCompanionStatus(nextSession)
     setSession(nextSession)
-    setConnectionState(deriveCompanionConnectionState({ identity: nextIdentity, session: nextSession, status: nextStatus }))
-  }, [identity])
+    setConnectionState(deriveCompanionConnectionState({ identity: nextIdentity ?? identityRef.current, session: nextSession, status: nextStatus }))
+  }, [])
 
   useEffect(() => {
     if (!session || connectionState !== 'connected') return
@@ -47,11 +51,12 @@ export function OperationalOnboarding() {
     return () => window.clearTimeout(timer)
   }, [connectionState, session, verifyStatus])
 
-  async function connect() {
+  const connect = useCallback(async () => {
     setPending(true)
     setError(undefined)
     try {
       const nextIdentity = await getCompanionIdentity()
+      identityRef.current = nextIdentity
       setIdentity(nextIdentity)
       const localSession = await bootstrapLocalCompanion()
       if (localSession) {
@@ -62,11 +67,18 @@ export function OperationalOnboarding() {
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : 'CONNECTION_ERROR'
       setError(message)
-      setConnectionState(message === 'ORIGIN_NOT_ALLOWED' ? 'permission-denied' : 'error')
+      setConnectionState(message.startsWith('PAIRING_') ? 'pairing-required' : message === 'ORIGIN_NOT_ALLOWED' ? 'permission-denied' : 'error')
     } finally {
       setPending(false)
     }
-  }
+  }, [verifyStatus])
+
+  useEffect(() => {
+    if (localFallback && !localConnectAttemptedRef.current) {
+      localConnectAttemptedRef.current = true
+      void connect()
+    }
+  }, [connect, localFallback])
 
   async function pair(code: string) {
     setPending(true)
@@ -102,24 +114,24 @@ export function OperationalOnboarding() {
     <main className="min-h-screen bg-mist text-ink grid place-items-center px-5 py-10">
       <section className="panel w-full max-w-3xl rounded-sm p-7 sm:p-10">
         <p className="hud-label">Operational workspace · {connectionState}</p>
-        <h1 className="mt-3 text-3xl font-semibold">Connect your private FindMnemo companion</h1>
+        <h1 className="mt-3 text-3xl font-semibold">Connect this computer</h1>
         <p className="mt-3 max-w-2xl text-sm leading-6 text-mut">
-          Connect checks the loopback companion and may trigger your browser's local-network permission. Gmail credentials and operational data stay on this computer.
+          FindMnemo connects this page to the app running on this computer. Email access, local AI activity, project files, and credentials stay on this device.
         </p>
         <div className="mt-6"><ConnectionStatus state={connectionState} /></div>
         {connectionState === 'pairing-required' && (
           <div className="mt-6"><PairingDialog pending={pending} error={error} onPair={pair} /></div>
         )}
-        {error && connectionState !== 'pairing-required' && <p className="mt-3 text-xs text-rose-300" role="alert">Diagnostic code: {error}</p>}
+        {error && <p className="mt-3 text-xs text-rose-300" role="alert">{connectionState === 'pairing-required' ? 'The automatic local handoff expired or was already used. Enter the current one-time code shown in the installed FindMnemo window.' : `Diagnostic code: ${error}`}</p>}
         <div className="mt-6 flex flex-wrap gap-3">
           {connectionState !== 'connected' && connectionState !== 'pairing-required' && (
             <button type="button" disabled={pending} onClick={connect} className="rounded-sm bg-sync px-4 py-2 text-sm font-semibold text-chrome disabled:opacity-55">
-              {pending ? 'Checking companion...' : 'Connect local companion'}
+              {pending ? 'Connecting...' : 'Connect this computer'}
             </button>
           )}
-          <a href="http://127.0.0.1:3210/app" className="rounded-sm border border-line px-4 py-2 text-sm text-ink hover:border-sync/60">Open local fallback</a>
+          <a href="http://127.0.0.1:3210/app" className="rounded-sm border border-line px-4 py-2 text-sm text-ink hover:border-sync/60">Use FindMnemo on this computer</a>
           <a href="/demo" className="rounded-sm border border-line px-4 py-2 text-sm text-ink hover:border-sync/60">Explore fictional sample</a>
-          <a href="/" className="px-4 py-2 text-sm text-mut hover:text-ink">Back</a>
+          <a href={localFallback ? 'https://findmnemo.vercel.app/app' : '/'} className="px-4 py-2 text-sm text-mut hover:text-ink">{localFallback ? 'Return to hosted setup' : 'Back'}</a>
         </div>
       </section>
     </main>

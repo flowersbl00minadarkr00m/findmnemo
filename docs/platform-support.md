@@ -19,3 +19,5 @@ Fresh automated evidence: [Source run 29222169928](https://github.com/flowersbl0
 macOS/Linux are source-run only. This feature does not provide `.dmg`, Homebrew, `.deb`, AppImage, systemd, launch-agent, or daemon installation.
 
 Run `npm run setup:check` before building. Its `supportLevel`, Node, filesystem, listener, database, dependency-lock, and credential-store fields are local evidence. Missing/locked secure storage keeps Gmail unavailable and never triggers a plaintext fallback. See [source-run.md](source-run.md) for recovery.
+
+Cross-agent activity currently has a separate Windows x64 exact-version matrix and does not inherit the broader source-run platform claim. See [Agent activity setup, compatibility, and privacy](agent-activity.md). Full macOS/Linux agent-activity hook and extension certification remains deferred.
