@@ -324,6 +324,10 @@ export async function startCompanion({
           rejectStop(logError)
         })
       })
+      // Node may retain fetch keep-alive sockets long enough to block a Windows
+      // restart and keep SQLite's WAL file locked. Once close() stops accepting
+      // new work, explicitly release idle sockets while active requests drain.
+      server.closeIdleConnections()
     })
     return stopPromise
   }

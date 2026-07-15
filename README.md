@@ -42,6 +42,8 @@ For chat-native model routing, open **Engines**, choose **Check this computer**,
 
 For privacy-minimized active-work tickets from Codex, Claude Code, and Pi, use the installed companion’s **Data & Privacy → Agent activity** controls and review the exact [Windows compatibility, setup, snapshot, lifecycle, and privacy boundary](docs/agent-activity.md). Detection, manual reporting, snapshots, partial automatic events, and explicit terminal evidence are reported separately; unsupported versions retain a manual fallback.
 
+External Codex, Claude, and Pi sessions need a local bridge or browser automation before their tickets count as live agent-created work. The hosted interface alone cannot observe private desktop sessions.
+
 For local model-usage analytics, open **Metrics**, choose **Model Usage**, and refresh manually. The Windows package includes the exact [qualified Tokscale collector](docs/compatibility/tokscale.md); locked source installs receive the matching platform dependency, so no separate global Tokscale installation is required. FindMnemo normalizes the local result without sending raw logs, prompts, responses, credentials, paths, or readable session/workspace identities to the browser. See the [navigation guide](docs/navigation.md), [model-usage guide](docs/model-usage.md), and [third-party notices](THIRD_PARTY_NOTICES.md).
 
 Use **Data & Privacy** to preview and download companion-owned data or safely add supported records from a FindMnemo bundle. See the [data portability guide](docs/data-privacy.md) for category, import, and privacy boundaries.

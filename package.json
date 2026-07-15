@@ -35,7 +35,7 @@
     "verify:tokscale-windows": "npm run build:source && node scripts/verify-tokscale-windows.mjs",
     "verify:tokscale-embedded": "npm run package:desktop:dir && node scripts/verify-tokscale-package.mjs",
     "verify:agent-activity-windows": "npm run build:companion && node scripts/verify-agent-activity-windows.mjs",
-    "verify:ci": "npm test -- --run && npm run check:ontology && npm run check:observed-work && npm run check:workflow && npm run check:routing && npm run check:local-private && npm run check:public-release && npm run lint && npm run build:source && npm run verify:source",
+    "verify:ci": "npm test -- --run --maxWorkers=4 && npm run check:ontology && npm run check:observed-work && npm run check:workflow && npm run check:routing && npm run check:local-private && npm run check:public-release && npm run lint && npm run build:source && npm run verify:source",
     "test": "vitest",
     "check:ontology": "node scripts/check-personal-ontology.mjs",
     "check:observed-work": "node scripts/check-observed-work-export.mjs",

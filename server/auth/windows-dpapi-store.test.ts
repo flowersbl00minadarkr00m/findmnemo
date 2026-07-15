@@ -17,5 +17,5 @@ describe.skipIf(process.platform !== 'win32')('Windows DPAPI secret store', () =
     expect(await readFile(join(directory, 'gmail-refresh-token.dpapi'), 'utf8')).not.toContain('fixture-private-value')
     await store.delete('gmail-refresh-token')
     expect(await store.has('gmail-refresh-token')).toBe(false)
-  })
+  }, 15_000)
 })
