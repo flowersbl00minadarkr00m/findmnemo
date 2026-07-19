@@ -5,8 +5,9 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { COMPANION_HOST, CompanionStartError, installCompanionSignalHandlers, startCompanion, type CompanionDependencies, type RunningCompanion } from './companion.js'
-import { EventEmitter } from 'node:events'
+import { EventEmitter, once } from 'node:events'
 import { createServer } from 'node:http'
+import { createConnection } from 'node:net'
 import { COMPANION_PROTOCOL_VERSION, type OperationalRoutingPolicy } from '../shared/companion-contract.js'
 import { OperationalRepository } from './db/operational-repository.js'
 import { MemorySecretStore } from './auth/secret-store.js'
@@ -514,6 +515,7 @@ describe('loopback companion shell', () => {
       method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify(ticket),
     })
     expect(created.status).toBe(201)
+    await created.arrayBuffer()
     await first.stop()
     running.splice(running.indexOf(first), 1)
 
@@ -535,7 +537,45 @@ describe('loopback companion shell', () => {
     })
     expect(updated.status).toBe(200)
     expect((await updated.json() as { data: { status: string } }).data.status).toBe('in-progress')
-    expect((await fetch(`http://${COMPANION_HOST}:${second.port}/api/v1/tickets/ticket-durable`, { method: 'DELETE', headers: secondHeaders })).status).toBe(200)
+    const deleted = await fetch(`http://${COMPANION_HOST}:${second.port}/api/v1/tickets/ticket-durable`, { method: 'DELETE', headers: secondHeaders })
+    expect(deleted.status).toBe(200)
+    await deleted.arrayBuffer()
+    await second.stop()
+    running.splice(running.indexOf(second), 1)
+  }, 15_000)
+
+  it('bounds shutdown and releases SQLite when a client stalls mid-request', async () => {
+    const databasePath = join(distPath, 'bounded-shutdown.db')
+    const companion = await startCompanion({ port: 0, distPath, databasePath })
+    running.push(companion)
+
+    const requestSeen = once(companion.server, 'request')
+    const socket = createConnection({ host: COMPANION_HOST, port: companion.port })
+    await once(socket, 'connect')
+    socket.write([
+      'POST /api/v1/pairing/session HTTP/1.1',
+      `Host: ${COMPANION_HOST}:${companion.port}`,
+      'Content-Type: application/json',
+      'Content-Length: 1024',
+      'Connection: keep-alive',
+      '',
+      '{',
+    ].join('\r\n'))
+    await requestSeen
+
+    const stopPromise = companion.stop()
+    const stoppedWithinBound = await Promise.race([
+      stopPromise.then(() => true),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 2_500)),
+    ])
+    socket.destroy()
+    await stopPromise
+    running.splice(running.indexOf(companion), 1)
+
+    expect(stoppedWithinBound).toBe(true)
+    await rm(databasePath, { force: true })
+    await rm(`${databasePath}-wal`, { force: true })
+    await rm(`${databasePath}-shm`, { force: true })
   }, 15_000)
 
   it('shares one companion-owned ticket state between hosted and local sessions', async () => {

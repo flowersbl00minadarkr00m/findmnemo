@@ -67,6 +67,7 @@ import { detectWindowsAgentActivityStatus } from './agent-activity/windows-agent
 export const COMPANION_HOST = '127.0.0.1' as const
 export const COMPANION_PORT = 3210
 export const COMPANION_VERSION = '0.1.0'
+const COMPANION_SHUTDOWN_DRAIN_MS = 1_000
 
 export class CompanionStartError extends Error {
   readonly code: CompanionErrorCode
@@ -314,7 +315,12 @@ export async function startCompanion({
   let stopPromise: Promise<void> | undefined
   const stop = () => {
     stopPromise ??= new Promise((resolveStop, rejectStop) => {
+      const forceCloseTimer = setTimeout(() => {
+        server.closeAllConnections()
+      }, COMPANION_SHUTDOWN_DRAIN_MS)
+      forceCloseTimer.unref()
       server.close((error) => {
+        clearTimeout(forceCloseTimer)
         void logger.drain().then(() => {
           database.close()
           if (error) rejectStop(error)
@@ -327,6 +333,8 @@ export async function startCompanion({
       // Node may retain fetch keep-alive sockets long enough to block a Windows
       // restart and keep SQLite's WAL file locked. Once close() stops accepting
       // new work, explicitly release idle sockets while active requests drain.
+      // Force-close any client that never finishes within the bounded grace
+      // period so shutdown can release SQLite's WAL/SHM handles deterministically.
       server.closeIdleConnections()
     })
     return stopPromise
