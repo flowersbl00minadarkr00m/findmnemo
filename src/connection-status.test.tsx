@@ -11,7 +11,7 @@ describe('connection recovery status', () => {
       unmount()
     }
     render(<ConnectionStatus state="error" />)
-    expect(screen.getByRole('status')).toHaveTextContent('cause is not yet verified')
+    expect(screen.getByRole('status')).toHaveTextContent('could not confirm a healthy companion')
     expect(screen.getByRole('status')).not.toHaveTextContent(/firewall blocked|VPN blocked|enterprise policy blocked/i)
   })
 })

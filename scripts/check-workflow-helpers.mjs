@@ -477,6 +477,7 @@ check('Receipt disposition persists to Supabase when a linked receipt exists', a
 
 check('Large-view bundle splitting is implemented and documented as a review standard', async () => {
   const app = await fs.readFile(new URL('../src/App.tsx', import.meta.url), 'utf8')
+  const onboarding = await fs.readFile(new URL('../src/components/OperationalOnboarding.tsx', import.meta.url), 'utf8')
   const architecture = await fs.readFile(new URL('../docs/architecture.md', import.meta.url), 'utf8')
 
   assert(app.includes('lazy(') && app.includes('Suspense'), 'App should use React lazy/Suspense for split views')
@@ -485,6 +486,8 @@ check('Large-view bundle splitting is implemented and documented as a review sta
   assert(!app.includes('ProjectProgressView'), 'the contracted Projects/SDD leaf should not remain in the app shell')
   assert(app.includes("import('./components/EmailPanel')"), 'Email view should be dynamically imported')
   assert(!app.includes("import { Analytics } from './components/Analytics'"), 'Analytics should not be statically imported into the app shell')
+  assert(onboarding.includes("lazy(() => import('../App'))"), 'the operational workspace should load only after companion verification')
+  assert(!onboarding.includes("import App from '../App'"), 'the operational workspace should not inflate the public/pre-connection entry chunk')
   assert(architecture.includes('bundle-size warnings as a Standards-axis finding'), 'bundle warnings should be documented as a public review standard')
 })
 

@@ -31,7 +31,7 @@ export function WorkspaceRouter() {
           </p>
           <div className="mt-6 flex flex-col gap-3 sm:flex-row">
             <a href="/demo" className="rounded-sm bg-sync px-5 py-3 text-center text-sm font-semibold text-chrome">Explore fictional sample</a>
-            <a href="http://127.0.0.1:3210/app" className="rounded-sm border border-line px-5 py-3 text-center text-sm font-semibold text-ink">Use FindMnemo on this computer</a>
+            <a href="http://127.0.0.1:3210/app" className="rounded-sm border border-line px-5 py-3 text-center text-sm font-semibold text-ink">Open local app (requires companion running)</a>
           </div>
         </section>
       </main>

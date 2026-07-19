@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { deriveCompanionConnectionState, getUsageCapability, sessionRotationDelay } from './companion-client'
+import { deriveCompanionConnectionState, getCompanionIdentity, getUsageCapability, sessionRotationDelay } from './companion-client'
 
 const identity = { protocolVersion: '1.0.0', companionVersion: '0.1.0', instanceId: 'test', pairingRequired: true } as const
 const session = { token: 'memory-only', browserNonce: 'browser_nonce_1234567890', expiresAt: '2026-07-10T00:15:00.000Z' }
@@ -24,6 +24,15 @@ describe('companion connection state', () => {
   it('preserves explicit denied and unsupported evidence', () => {
     expect(deriveCompanionConnectionState({ permission: 'denied' })).toBe('permission-denied')
     expect(deriveCompanionConnectionState({ permission: 'unsupported' })).toBe('unsupported')
+  })
+
+  it('aborts an identity probe that never resolves', async () => {
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError')), { once: true })
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(getCompanionIdentity(5)).rejects.toMatchObject({ name: 'AbortError' })
   })
 
   it('rotates two minutes before expiry and immediately when the rotation window has started', () => {

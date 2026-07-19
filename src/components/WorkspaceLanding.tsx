@@ -8,23 +8,23 @@ export function WorkspaceLanding({ operationalEnabled = true }: { operationalEna
           See what your agents are doing without mistaking a product tour for live work.
         </h1>
         <p className="mt-4 max-w-2xl text-sm leading-6 text-mut sm:text-base">
-          Connect the private local companion for operational data, or explore a separate fictional Sample workspace that never accesses Gmail, agents, or operational storage.
+          Explore a complete fictional product tour in this browser, or connect the operational workspace after installing and starting the private local companion.
         </p>
         <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+          <a href="/demo" className="rounded-sm bg-sync px-5 py-3 text-center text-sm font-semibold text-chrome hover:bg-[#E8641C]">
+            Explore sample workspace
+          </a>
           {operationalEnabled ? (
-            <a href="/app" className="rounded-sm bg-sync px-5 py-3 text-center text-sm font-semibold text-chrome hover:bg-[#E8641C]">
-              Connect FindMnemo
+            <a href="/app" className="rounded-sm border border-line bg-white/[0.03] px-5 py-3 text-center text-sm font-semibold text-ink hover:border-sync/60">
+              Connect operational workspace
             </a>
           ) : (
             <span className="rounded-sm border border-line bg-white/[0.03] px-5 py-3 text-center text-sm font-semibold text-faint">
               Operational workspace temporarily unavailable
             </span>
           )}
-          <a href="/demo" className="rounded-sm border border-line bg-white/[0.03] px-5 py-3 text-center text-sm font-semibold text-ink hover:border-sync/60">
-            Explore sample workspace
-          </a>
         </div>
-        <p className="mt-5 text-xs text-faint">Sample data is fictional, tab-scoped, and reset when the tab closes.</p>
+        <div className="mt-5 grid gap-2 text-xs leading-5 text-faint sm:grid-cols-2"><p><span className="font-medium text-ink">Sample:</span> fictional, tab-scoped, and requires no installation.</p><p><span className="font-medium text-ink">Operational:</span> requires the Windows companion installed and running on this computer.</p></div>
       </section>
     </main>
   )
