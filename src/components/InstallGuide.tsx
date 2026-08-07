@@ -76,7 +76,7 @@ export function InstallGuide() {
           <Step title="Option B — build the desktop preview installer">
             <Command>{'npm ci\nnpm run package:desktop'}</Command>
             <p>
-              This writes <span className="font-mono text-ink">release-desktop\\FindMnemo-Companion-0.1.0-x64.exe</span>. The installer is per-user and
+              This writes <span className="font-mono text-ink">release-desktop\FindMnemo-Companion-0.1.0-x64.exe</span>. The installer is per-user and
               x64 and needs no administrator rights. Node.js and the checkout are needed to build it, not to use it afterwards.
             </p>
           </Step>
