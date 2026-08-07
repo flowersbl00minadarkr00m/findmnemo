@@ -1,5 +1,11 @@
 import type { DatabaseSync } from 'node:sqlite'
-import type { AgentKind, AssignmentEventV1, AssignmentEvidenceKind } from '../../shared/agent-activity-contract.js'
+import {
+  normalizeAssignmentEvent,
+  type AgentKind,
+  type AssignmentEventV1,
+  type AssignmentEvidenceKind,
+  type NormalizedAssignmentEvent,
+} from '../../shared/agent-activity-contract.js'
 import type { AgentActivityIntegrationInput } from './agent-activity-repository.js'
 
 export interface ActivityAdapterManifest {
@@ -75,14 +81,23 @@ export class ActivityCapabilityRegistry {
     }
   }
 
-  validate(event: AssignmentEventV1): void {
-    const row = this.db.prepare(`SELECT agent_kind,adapter_version,installed_version,enabled,configured,support_level,
+  validate(input: AssignmentEventV1 | NormalizedAssignmentEvent): void {
+    const normalizedInput = 'schemaVersion' in input
+    const event = normalizedInput ? input : normalizeAssignmentEvent(input)
+    const row = this.db.prepare(`SELECT agent_kind,agent_family,execution_surface,adapter_version,installed_version,enabled,configured,support_level,
       freshness_profile,heartbeat_seconds,freshness_window_seconds FROM agent_activity_integrations WHERE id=?`).get(event.integrationId) as Record<string, unknown> | undefined
     if (!row || !row.enabled || !row.configured) throw new Error('ACTIVITY_INTEGRATION_NOT_ENABLED')
+    if (
+      event.agent !== row.agent_kind ||
+      (normalizedInput && (
+        event.agentFamily !== row.agent_family ||
+        event.executionSurface !== row.execution_surface
+      ))
+    ) throw new Error('ACTIVITY_CAPABILITY_MISMATCH')
     if (row.support_level === 'manual') {
       const evidenceAllowed = event.observation.evidenceKind === 'mcp-tool' || event.observation.evidenceKind === 'manual-command' || event.observation.evidenceKind === 'snapshot'
       if (
-        event.agent !== row.agent_kind || event.adapterVersion !== MANUAL_ACTIVITY_ADAPTER_VERSION ||
+        event.adapterVersion !== MANUAL_ACTIVITY_ADAPTER_VERSION ||
         row.adapter_version !== MANUAL_ACTIVITY_ADAPTER_VERSION || event.agentVersion !== null ||
         !evidenceAllowed ||
         row.freshness_profile !== 'manual' || nullableNumber(row.heartbeat_seconds) !== null || Number(row.freshness_window_seconds) !== 1_800

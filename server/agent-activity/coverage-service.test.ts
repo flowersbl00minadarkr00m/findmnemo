@@ -9,6 +9,7 @@ import { TicketLifecycleService } from '../tickets/ticket-lifecycle-service.js'
 import { AgentActivityRepository } from './agent-activity-repository.js'
 import { AgentActivityService } from './agent-activity-service.js'
 import { AgentActivityCoverageService } from './coverage-service.js'
+import { manualActivityRegistration } from './capability-manifests.js'
 
 const cleanup: string[] = []
 afterEach(async () => Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true }))))
@@ -59,7 +60,23 @@ describe('AgentActivityCoverageService', () => {
 
     const coverage = new AgentActivityCoverageService(repository, () => now)
     const pageOne = coverage.list({ scope: 'active', limit: 1 })
-    expect(pageOne).toMatchObject({ total: 2, scope: 'active', items: [{ id: firstReceipt.assignmentKey, project: { kind: 'approved-project', id: 'project-safe', label: 'FindMnemo' }, effectiveState: 'active', sourceUpdatePolicy: 'follow', summaryOwner: 'source', projectOwner: 'source', linkedTicketKind: null }] })
+    expect(pageOne).toMatchObject({
+      total: 2,
+      scope: 'active',
+      items: [{
+        id: firstReceipt.assignmentKey,
+        agent: 'codex-cli',
+        agentFamily: 'codex',
+        executionSurface: 'legacy-ambiguous',
+        surfaceLabel: 'Legacy / ambiguous surface',
+        project: { kind: 'approved-project', id: 'project-safe', label: 'FindMnemo' },
+        effectiveState: 'active',
+        sourceUpdatePolicy: 'follow',
+        summaryOwner: 'source',
+        projectOwner: 'source',
+        linkedTicketKind: null,
+      }],
+    })
     expect(operational.getTicket(firstReceipt.ticketId)?.payload).toMatchObject({ workNotes: [], artifacts: [], decisionLog: [], description: expect.stringMatching(/lifecycle metadata only/i) })
     expect(pageOne.nextCursor).toEqual(expect.any(String))
     const pageTwo = coverage.list({ scope: 'active', limit: 1, cursor: pageOne.nextCursor })
@@ -91,6 +108,28 @@ describe('AgentActivityCoverageService', () => {
     activities.ingest({ ...base, eventId: '018f6f7e-6f52-7e54-8aa5-000000000212', assignment: { ...base.assignment, summary: { text: 'Source tried to replace title', source: 'explicit-agent-tool' }, projectRef: { kind: 'unassigned' } }, observation: { ...base.observation, sequence: 2, kind: 'waiting', reportedState: 'waiting', observedAt: now.toISOString() } })
     expect(coverage.get(receipt.assignmentKey)).toMatchObject({ safeSummary: 'Human title', projectRef: { kind: 'approved-project', id: 'project-human' }, reportedState: 'waiting', sourceUpdatePolicy: 'paused' })
     expect(operational.getTicket(receipt.ticketId)?.payload).toMatchObject({ title: 'Human title', projectId: 'project-human', activityState: 'active' })
+    database.close()
+  })
+
+  it('keeps a misleading legacy integration id ambiguous instead of inferring a desktop surface', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'findmnemo-coverage-ambiguous-')); cleanup.push(root)
+    const now = new Date('2026-07-14T20:00:00.000Z')
+    const database = await openFindMnemoDatabase({ path: join(root, 'findmnemo.db') })
+    const operational = new OperationalRepository(database.db)
+    const repository = new AgentActivityRepository(database.db, operational, new TicketLifecycleService(operational, () => now), Buffer.alloc(32, 5), () => now)
+    repository.registerIntegration(manualActivityRegistration('surface:codex-desktop', 'codex-cli'))
+    new AgentActivityService(repository, () => now).ingest(assignmentEventFixture({
+      integrationId: 'surface:codex-desktop',
+      adapterVersion: 'manual-1.0.0',
+      agentVersion: null,
+      observation: { ...assignmentEventFixture().observation, evidenceKind: 'mcp-tool' },
+    }))
+    expect(new AgentActivityCoverageService(repository, () => now).list({ scope: 'active' }).items[0]).toMatchObject({
+      integrationId: 'surface:codex-desktop',
+      agentFamily: 'codex',
+      executionSurface: 'legacy-ambiguous',
+      surfaceLabel: 'Legacy / ambiguous surface',
+    })
     database.close()
   })
 })

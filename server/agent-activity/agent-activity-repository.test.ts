@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { assignmentEventFixture } from '../../shared/agent-activity-contract.test.js'
+import { assignmentEventFixture, assignmentEventV2Fixture } from '../../shared/agent-activity-contract.test.js'
 import { openFindMnemoDatabase } from '../db/database.js'
 import { OperationalRepository } from '../db/operational-repository.js'
 import { TicketLifecycleService } from '../tickets/ticket-lifecycle-service.js'
@@ -24,6 +24,13 @@ async function fixture() {
     agent: 'codex-cli',
     adapterVersion: '1.0.0',
     installedVersion: '0.144.3',
+  })
+  activity.registerIntegration({
+    id: 'integration-codex-desktop-1',
+    agentFamily: 'codex',
+    executionSurface: 'codex-desktop',
+    adapterVersion: '2.0.0',
+    installedVersion: '1.2.3',
   })
   return { database, operational, activity }
 }
@@ -74,6 +81,85 @@ describe('AgentActivityRepository tracer', () => {
     })
     expect(projection).not.toHaveProperty('evidenceKey')
     expect(projection).not.toHaveProperty('originAssignmentId')
+    database.close()
+  })
+
+  it('keeps the v1 assignment identity golden vector and domain-separates v2 identity', async () => {
+    const { database, activity } = await fixture()
+    expect(activity.assignmentKeyFor(assignmentEventFixture()))
+      .toBe('f150038ba2c01238297d909369f2dde97a826a5eb9b983268996feadde075da9')
+    expect(activity.assignmentKeyFor(assignmentEventV2Fixture()))
+      .toBe('fd79a8436937da7dc105a3dabab6eca4f50a2f219af7bb666ba8c9033f9a833b')
+    expect(activity.assignmentKeyFor(assignmentEventV2Fixture())).not.toBe(activity.assignmentKeyFor(assignmentEventFixture()))
+    database.close()
+  })
+
+  it('binds v2 family and surface to immutable integration metadata and projects safe attribution', async () => {
+    const { database, activity } = await fixture()
+    const event = assignmentEventV2Fixture()
+    const receipt = activity.ingest(event)
+
+    expect(receipt.outcome).toBe('applied')
+    expect(activity.getAssignment(receipt.assignmentKey)).toMatchObject({
+      agent: 'codex-cli',
+      agentFamily: 'codex',
+      executionSurface: 'codex-desktop',
+      modelLabel: 'openai/gpt-5-codex',
+      modelSource: 'host-reported',
+      modelConfidence: 'reported',
+    })
+    expect(database.db.prepare(`SELECT agent_family,execution_surface,model_label,model_source,model_confidence
+      FROM agent_assignments WHERE assignment_key=?`).get(receipt.assignmentKey)).toEqual({
+      agent_family: 'codex',
+      execution_surface: 'codex-desktop',
+      model_label: 'openai/gpt-5-codex',
+      model_source: 'host-reported',
+      model_confidence: 'reported',
+    })
+
+    expect(() => activity.ingest({
+      ...event,
+      eventId: '028f6f7e-6f52-7e54-8aa5-000000000099',
+      executionSurface: 'codex-cli',
+    })).toThrow('ACTIVITY_INTEGRATION_MISMATCH')
+    expect(() => activity.registerIntegration({
+      id: 'integration-codex-desktop-1',
+      agentFamily: 'codex',
+      executionSurface: 'codex-cli',
+      adapterVersion: '2.0.0',
+      installedVersion: '1.2.3',
+    })).toThrow('ACTIVITY_INTEGRATION_REBIND')
+    database.close()
+  })
+
+  it('ignores rejected v2 model labels without persisting them or clearing an earlier valid label', async () => {
+    const { database, activity } = await fixture()
+    const first = assignmentEventV2Fixture()
+    const started = activity.ingest(first)
+    const rejectedLabel = 'password=never-store-this'
+    const ignored = activity.ingest({
+      ...first,
+      eventId: '028f6f7e-6f52-7e54-8aa5-000000000002',
+      observation: { ...first.observation, sequence: 2, kind: 'heartbeat', observedAt: '2026-07-14T17:00:01.000Z' },
+      model: { label: rejectedLabel, source: 'host-reported', confidence: 'reported' },
+    })
+    const absent = activity.ingest({
+      ...first,
+      eventId: '028f6f7e-6f52-7e54-8aa5-000000000003',
+      observation: { ...first.observation, sequence: 3, kind: 'waiting', reportedState: 'waiting', observedAt: '2026-07-14T17:00:02.000Z' },
+      model: null,
+    })
+
+    expect(ignored).toMatchObject({ outcome: 'applied', receiptCodes: ['MODEL_LABEL_IGNORED'] })
+    expect(absent.outcome).toBe('applied')
+    expect(activity.getAssignment(started.assignmentKey)).toMatchObject({
+      modelLabel: 'openai/gpt-5-codex',
+      modelSource: 'host-reported',
+      modelConfidence: 'reported',
+      lastAppliedSequence: 3,
+    })
+    expect(JSON.stringify(database.db.prepare('SELECT * FROM agent_assignments').all())).not.toContain(rejectedLabel)
+    expect(JSON.stringify(database.db.prepare('SELECT * FROM agent_assignment_events').all())).not.toContain(rejectedLabel)
     database.close()
   })
 

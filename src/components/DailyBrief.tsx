@@ -1,4 +1,5 @@
 import type { AttentionAction, AttentionBucket, AttentionItem, AttentionWorkspaceProjection, HomeView, Ticket } from '../types'
+import type { AgentActivityIntegrationDto } from '../../shared/companion-contract'
 import { useNarrowInspector } from '../lib/use-narrow-inspector'
 import { dailyBriefRowId } from '../lib/attention-dom'
 import { DailyBriefItem } from './DailyBriefItem'
@@ -6,6 +7,7 @@ import { DayStatus } from './DayStatus'
 import { EvidenceInspector } from './EvidenceInspector'
 import { SourceHealthStrip } from './SourceHealthStrip'
 import { WorkspaceViewSwitch } from './WorkspaceViewSwitch'
+import { AgentActivityCoverageNotice } from './AgentActivityCoverageNotice'
 
 const BUCKETS: Array<{ id: AttentionBucket; label: string; description: string }> = [
   { id: 'needs-action', label: 'Needs action', description: 'Decisions or recovery you can move now.' },
@@ -20,6 +22,11 @@ export function DailyBrief({
   onSelectedIdChange,
   onAction,
   onHomeViewChange,
+  agentIntegrations,
+  agentAssignmentCount = 0,
+  agentActivityLoading = false,
+  agentActivityError,
+  onOpenPrivacy,
 }: {
   projection: AttentionWorkspaceProjection
   selectedId?: string
@@ -27,6 +34,11 @@ export function DailyBrief({
   onSelectedIdChange: (id?: string) => void
   onAction: (action: AttentionAction, item: AttentionItem) => Promise<void>
   onHomeViewChange: (view: HomeView) => void
+  agentIntegrations?: readonly AgentActivityIntegrationDto[]
+  agentAssignmentCount?: number
+  agentActivityLoading?: boolean
+  agentActivityError?: string
+  onOpenPrivacy?: () => void
 }) {
   const narrow = useNarrowInspector()
   const selected = projection.items.find((item) => item.id === selectedId)
@@ -49,6 +61,8 @@ export function DailyBrief({
           <WorkspaceViewSwitch value="brief" onChange={onHomeViewChange} />
         </div>
       </header>
+
+      {agentIntegrations && <AgentActivityCoverageNotice integrations={agentIntegrations} assignmentCount={agentAssignmentCount} loading={agentActivityLoading} error={agentActivityError} onOpenPrivacy={onOpenPrivacy} />}
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
         <DayStatus status={projection.dayStatus} />

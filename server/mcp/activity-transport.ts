@@ -1,10 +1,19 @@
 import { randomUUID } from 'node:crypto'
 import { get as httpGet } from 'node:http'
-import type { AgentKind, AssignmentEventV1 } from '../../shared/agent-activity-contract.js'
-import { manualReportDraft, type ManualReportInput, type ManualReportReceipt } from '../agent-activity/manual-reporting-service.js'
+import {
+  parseAssignmentEvent,
+  type AgentFamily,
+  type AgentKind,
+  type AssignmentEvent,
+  type AssignmentEventV1,
+  type PreciseExecutionSurface,
+} from '../../shared/agent-activity-contract.js'
+import { manualReportDraft, manualReportEvent, type ManualReportInput, type ManualReportReceipt } from '../agent-activity/manual-reporting-service.js'
 import type { SecretStore } from '../auth/secret-store.js'
 import { ReporterSanitizer } from '../agent-activity/reporter/sanitizer.js'
 import { ResilientActivityReporter, RetrySpool, type RetryReceipt } from '../agent-activity/reporter/retry-spool.js'
+
+const INTERACTIVE_DELIVERY_TIMEOUT_MS = 2_000
 
 export type ManualActivityResult = ManualReportReceipt | { outcome: 'queued'; supportLevel: 'manual'; evidenceKind: 'mcp-tool' | 'manual-command'; queued: true }
 export interface ManualActivityTransport { report(input: ManualReportInput): Promise<ManualActivityResult> }
@@ -66,6 +75,8 @@ async function loopbackJson(urlValue: string, token: string): Promise<unknown> {
 interface HttpManualActivityTransportOptions {
   integrationId: string
   agent: AgentKind
+  agentFamily?: AgentFamily
+  executionSurface?: PreciseExecutionSurface
   store: SecretStore
   baseUrl?: string
   clock?: () => Date
@@ -76,38 +87,76 @@ export class HttpManualActivityTransport implements ManualActivityTransport {
   private readonly baseUrl: string
   private readonly integrationId: string
   private readonly agent: AgentKind
+  private readonly agentFamily?: AgentFamily
+  private readonly executionSurface?: PreciseExecutionSurface
   private readonly clock: () => Date
   private readonly sanitizer = new ReporterSanitizer()
+  private readonly preciseSequences = new Map<string, number>()
   private readonly spool: RetrySpool
 
   constructor(token: string, options: HttpManualActivityTransportOptions) {
     this.token = token; this.integrationId = options.integrationId; this.agent = options.agent
+    if ((options.agentFamily === undefined) !== (options.executionSurface === undefined)) throw new Error('ACTIVITY_INTEGRATION_MISMATCH')
+    this.agentFamily = options.agentFamily
+    this.executionSurface = options.executionSurface
     this.baseUrl = options.baseUrl ?? 'http://127.0.0.1:3210/api/v1/integration/agent-activity'
     this.clock = options.clock ?? (() => new Date())
     this.spool = new RetrySpool({ store: options.store, integrationId: options.integrationId, clock: this.clock })
   }
 
   async report(input: ManualReportInput): Promise<ManualActivityResult> {
-    if (input.integrationId !== this.integrationId || input.agent !== this.agent) throw new Error('ACTIVITY_INTEGRATION_MISMATCH')
+    if (
+      input.integrationId !== this.integrationId ||
+      input.agent !== this.agent ||
+      input.agentFamily !== this.agentFamily ||
+      input.executionSurface !== this.executionSurface
+    ) throw new Error('ACTIVITY_INTEGRATION_MISMATCH')
     const observedAt = this.clock().toISOString()
     const snapshot = input.action === 'snapshot' && !input.snapshot
       ? { requestId: randomUUID(), mode: 'explicit-report' as const, coverageStartedAt: observedAt }
       : input.snapshot
-    const event = this.sanitizer.sanitizeDraft(manualReportDraft(input, randomUUID(), observedAt, snapshot))
+    const preciseIdentity = `${input.integrationId}\0${input.assignmentId}\0${input.generation ?? 1}`
+    const preciseSequence = (this.preciseSequences.get(preciseIdentity) ?? 0) + 1
+    const built = input.agentFamily && input.executionSurface
+      ? manualReportEvent(input, randomUUID(), observedAt, preciseSequence, snapshot)
+      : { event: this.sanitizer.sanitizeDraft(manualReportDraft(input, randomUUID(), observedAt, snapshot)), receiptCodes: [] }
+    const event = built.event
+    if (input.agentFamily && input.executionSurface) this.preciseSequences.set(preciseIdentity, preciseSequence)
+    const normalized = parseAssignmentEvent(event).event
+    const metadata = input.agentFamily && input.executionSurface
+      ? {
+          agentFamily: input.agentFamily,
+          executionSurface: input.executionSurface,
+          modelLabel: normalized.modelLabel,
+          receiptCodes: built.receiptCodes,
+        }
+      : {}
     const queued = await this.spool.inspect()
     if (queued.eventCount > 0) {
       await this.spool.enqueue(event)
-      await this.spool.replay((candidate) => this.send(candidate, AbortSignal.timeout(150)), 1)
-      return { outcome: 'queued', supportLevel: 'manual', evidenceKind: input.evidenceKind, queued: true }
+      const replaySignal = AbortSignal.timeout(INTERACTIVE_DELIVERY_TIMEOUT_MS)
+      let currentReceipt: RetryReceipt | undefined
+      const replay = await this.spool.replay(async (candidate) => {
+        const receipt = await this.send(candidate, replaySignal)
+        if (candidate.eventId === event.eventId) currentReceipt = receipt
+        return receipt
+      })
+      if (replay.remaining === 0 && currentReceipt && (currentReceipt.outcome === 'applied' || currentReceipt.outcome === 'duplicate')) {
+        return { ...currentReceipt, supportLevel: 'manual', evidenceKind: input.evidenceKind, ...metadata } as ManualReportReceipt
+      }
+      return { outcome: 'queued', supportLevel: 'manual', evidenceKind: input.evidenceKind, queued: true, ...metadata }
     }
-    const result = await new ResilientActivityReporter(this.spool).submit(event, (candidate, signal) => this.send(candidate, signal))
-    if (result.delivered && result.receipt) return { ...result.receipt, supportLevel: 'manual', evidenceKind: input.evidenceKind } as ManualReportReceipt
-    return { outcome: 'queued', supportLevel: 'manual', evidenceKind: input.evidenceKind, queued: true }
+    const result = await new ResilientActivityReporter(this.spool, {
+      deliveryTimeoutMs: INTERACTIVE_DELIVERY_TIMEOUT_MS,
+      returnBudgetMs: INTERACTIVE_DELIVERY_TIMEOUT_MS + 250,
+    }).submit(event, (candidate, signal) => this.send(candidate, signal))
+    if (result.delivered && result.receipt) return { ...result.receipt, supportLevel: 'manual', evidenceKind: input.evidenceKind, ...metadata } as ManualReportReceipt
+    return { outcome: 'queued', supportLevel: 'manual', evidenceKind: input.evidenceKind, queued: true, ...metadata }
   }
 
-  async replay() { return this.spool.replay((event) => this.send(event, AbortSignal.timeout(150))) }
+  async replay() { return this.spool.replay((event) => this.send(event, AbortSignal.timeout(INTERACTIVE_DELIVERY_TIMEOUT_MS))) }
 
-  private async send(input: AssignmentEventV1, signal: AbortSignal, allowRecovery = true): Promise<RetryReceipt> {
+  private async send(input: AssignmentEvent, signal: AbortSignal, allowRecovery = true): Promise<RetryReceipt> {
     const response = await fetch(`${this.baseUrl}/events`, {
       method: 'POST', headers: { 'content-type': 'application/json', 'x-findmnemo-activity-token': this.token }, body: JSON.stringify(input), signal, redirect: 'error',
     })

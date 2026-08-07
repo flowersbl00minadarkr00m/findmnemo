@@ -2,8 +2,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, sep } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { assignmentEventFixture } from '../../shared/agent-activity-contract.test.js'
-import type { AssignmentEventV1 } from '../../shared/agent-activity-contract.js'
+import { assignmentEventFixture, assignmentEventV2Fixture } from '../../shared/agent-activity-contract.test.js'
+import type { AssignmentEventV1, AssignmentEventV2 } from '../../shared/agent-activity-contract.js'
 import { openFindMnemoDatabase } from '../db/database.js'
 import { OperationalRepository } from '../db/operational-repository.js'
 import { ProjectFolderDetector } from '../onboarding/project-folder-detector.js'
@@ -31,6 +31,13 @@ async function fixture() {
   const lifecycle = new TicketLifecycleService(operational, () => NOW)
   const activities = new AgentActivityRepository(database.db, operational, lifecycle, Buffer.alloc(32, 6), () => NOW)
   activities.registerIntegration({ id: 'integration-codex-1', agent: 'codex-cli', adapterVersion: '1.0.0', installedVersion: '0.144.3' })
+  activities.registerIntegration({
+    id: 'integration-codex-desktop-1',
+    agentFamily: 'codex',
+    executionSurface: 'codex-desktop',
+    adapterVersion: '2.0.0',
+    installedVersion: '1.2.3',
+  })
   const associations = new ProjectAssociationService(database.db, folders, operational, () => NOW)
   return { root, database, operational, folders, detector, folderService, activities, associations }
 }
@@ -116,6 +123,33 @@ describe('ProjectAssociationService context resolution', () => {
 })
 
 describe('ProjectAssociationService explicit targets', () => {
+  it('resolves a precise v2 target without losing normalized surface or model attribution', async () => {
+    const { root, database, operational, folders, detector, activities, associations } = await fixture()
+    const project = join(root, 'v2-project')
+    await mkdir(project)
+    folders.upsertDetection(await detector.inspect(project), { id: 'project-v2' })
+    operational.saveTicket({
+      id: 'v2-target',
+      status: 'todo',
+      source: 'manual',
+      origin: 'manual',
+      createdAt: NOW.toISOString(),
+      updatedAt: NOW.toISOString(),
+      payload: { title: 'Precise v2 target', status: 'todo' },
+    })
+    const service = new AgentActivityService(activities, () => NOW, associations)
+    const result = service.ingest(targetEventV2({ kind: 'ticket', ticketId: 'v2-target' }))
+
+    expect(result).toMatchObject({ outcome: 'applied', ticketId: 'v2-target' })
+    expect(activities.getAssignment(result.assignmentKey)).toMatchObject({
+      agentFamily: 'codex',
+      executionSurface: 'codex-desktop',
+      modelLabel: 'openai/gpt-5-codex',
+      projectRef: { kind: 'approved-project', id: 'project-v2' },
+    })
+    database.close()
+  })
+
   it('reuses the deterministic approved SDD task ticket and never edits SDD artifacts', async () => {
     const { root, database, operational, folders, detector, activities, associations } = await fixture()
     const project = join(root, 'sdd-project'); const spec = join(project, '.ai', 'sdd', 'specs', '015')
@@ -166,6 +200,21 @@ function targetEvent(targetRef: NonNullable<AssignmentEventV1['assignment']['tar
       ...base.assignment,
       originAssignmentId: `target-${eventId}`,
       projectRef: { kind: 'approved-project', id: 'project-1' },
+      targetRef,
+    },
+    observation: { ...base.observation, observedAt: NOW.toISOString() },
+  }
+}
+
+function targetEventV2(targetRef: NonNullable<AssignmentEventV2['assignment']['targetRef']>): AssignmentEventV2 {
+  const base = assignmentEventV2Fixture()
+  return {
+    ...base,
+    integrationId: 'integration-codex-desktop-1',
+    assignment: {
+      ...base.assignment,
+      originAssignmentId: 'v2-target-assignment',
+      projectRef: { kind: 'approved-project', id: 'project-v2' },
       targetRef,
     },
     observation: { ...base.observation, observedAt: NOW.toISOString() },

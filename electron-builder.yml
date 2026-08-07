@@ -29,6 +29,7 @@ extraResources:
   - from: THIRD_PARTY_NOTICES.md
     to: licenses/THIRD_PARTY_NOTICES.md
 win:
+  icon: build/icon.ico
   target:
     - target: nsis
       arch: [x64]

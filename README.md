@@ -2,7 +2,7 @@
 
 A local-first operations console for working with AI agents: tickets, agent activity, Gmail follow-ups, and model routing in one workspace — with the data kept on your machine.
 
-[**Live sample workspace**](https://findmnemo.vercel.app/demo) · [Run from source](docs/source-run.md) · [Docs](docs/)
+[**Live sample workspace**](https://findmnemo.vercel.app/demo) · [Windows local install](docs/unsigned-windows-preview.md) · [Docs](docs/)
 
 The operational route at `/app` requires the local Windows companion to be installed and running; the hosted interface cannot install or start it. The previous `mnemosync.vercel.app` address remains a compatibility fallback.
 
@@ -20,15 +20,32 @@ The operational route at `/app` requires the local Windows companion to be insta
 - Local model-usage metrics, refreshed manually, never uploaded
 - A companion process that binds only to `127.0.0.1`, storing everything in local SQLite
 
-## Quick start
+## Quick start on Windows
+
+FindMnemo does not currently publish a downloadable installer in GitHub Releases. To use the operational workspace today, clone this repository and either run the local companion in a terminal or build the unsigned per-user installer yourself.
+
+### Run locally from the checkout
 
 ```bash
 npm ci
+npm run setup:check
 npm run build:source
+npm run verify:source
 npm run start:companion
 ```
 
-Open `http://127.0.0.1:3210/app` — or try the hosted [sample workspace](https://findmnemo.vercel.app/demo) first (fictional data, browser-only). Full setup, including Gmail OAuth and diagnostics: [source-run guide](docs/source-run.md) · [Gmail setup](docs/gmail-setup.md) · [platform support](docs/platform-support.md).
+Keep that terminal open and open `http://127.0.0.1:3210/app`. This runs FindMnemo locally but does not install a desktop application.
+
+### Build the Windows desktop installer
+
+```bash
+npm ci
+npm run package:desktop
+```
+
+Run `release-desktop\FindMnemo-Companion-0.1.0-x64.exe`. It is a per-user, no-admin unsigned preview, so review any Windows SmartScreen warning without disabling security controls. See the [Windows install guide](docs/unsigned-windows-preview.md) for the exact limitation.
+
+The hosted `/app` route is only a browser interface: the local companion must already be installed or running. Or try the hosted [sample workspace](https://findmnemo.vercel.app/demo) first (fictional data, browser-only). Full setup: [Gmail setup](docs/gmail-setup.md) · [platform support](docs/platform-support.md).
 
 ## How it works
 

@@ -3,6 +3,7 @@ import type { SecretStore } from '../../auth/secret-store.js'
 import type { ReporterEventDraft } from './sanitizer.js'
 import { ReporterSanitizer } from './sanitizer.js'
 import { ResilientActivityReporter, RetrySpool, retrySpoolSecretRef } from './retry-spool.js'
+import { manualReportEvent, type ManualReportInput } from '../manual-reporting-service.js'
 
 class CapturingStore implements SecretStore {
   readonly values = new Map<string, string>()
@@ -24,6 +25,33 @@ function draft(kind: ReporterEventDraft['kind'], observedAt = '2026-07-14T23:00:
 }
 
 describe('RetrySpool', () => {
+  it('stores and replays the strict v2 event produced by a trusted surface-bound manual report', async () => {
+    const store = new CapturingStore()
+    const spool = new RetrySpool({ store, integrationId: 'surface:codex-desktop' })
+    const input: ManualReportInput = {
+      integrationId: 'surface:codex-desktop',
+      agent: 'codex-cli',
+      agentFamily: 'codex',
+      executionSurface: 'codex-desktop',
+      action: 'start',
+      assignmentId: 'precise-retry-work',
+      generation: 1,
+      summary: 'Safe precise retry work',
+      projectRef: { kind: 'unassigned' },
+      modelLabel: 'openai/gpt-5.6',
+      evidenceKind: 'mcp-tool',
+    }
+    const event = manualReportEvent(input, '018f6f7e-6f52-7e54-8aa5-000000000901', '2026-07-14T23:00:00.000Z', 1).event
+    await spool.enqueue(event)
+    expect(store.values.get(retrySpoolSecretRef(input.integrationId))).toContain('findmnemo.assignment-event.v2')
+    const seen: string[] = []
+    expect(await spool.replay(async (candidate) => {
+      seen.push(candidate.schema)
+      return { outcome: 'applied' }
+    })).toMatchObject({ removed: 1, remaining: 0 })
+    expect(seen).toEqual(['findmnemo.assignment-event.v2'])
+  })
+
   it('coalesces heartbeats before sequence allocation and stores only validated V1 events in the protected store', async () => {
     const store = new CapturingStore(); const spool = new RetrySpool({ store, integrationId: 'manual:codex-cli', clock: () => new Date('2026-07-14T23:00:03.000Z') })
     await spool.enqueueDrafts([draft('started'), draft('heartbeat', '2026-07-14T23:00:01.000Z'), draft('heartbeat', '2026-07-14T23:00:02.000Z')], new ReporterSanitizer())

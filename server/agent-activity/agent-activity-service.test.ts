@@ -2,8 +2,8 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { assignmentEventFixture } from '../../shared/agent-activity-contract.test.js'
-import type { AssignmentEventV1 } from '../../shared/agent-activity-contract.js'
+import { assignmentEventFixture, assignmentEventV2Fixture } from '../../shared/agent-activity-contract.test.js'
+import { parseAssignmentEvent, type AssignmentEventV1, type AssignmentEventV2 } from '../../shared/agent-activity-contract.js'
 import { openFindMnemoDatabase } from '../db/database.js'
 import { OperationalRepository } from '../db/operational-repository.js'
 import { TicketLifecycleService } from '../tickets/ticket-lifecycle-service.js'
@@ -23,6 +23,14 @@ async function fixture() {
   const lifecycle = new TicketLifecycleService(operational, clock)
   const repository = new AgentActivityRepository(database.db, operational, lifecycle, Buffer.alloc(32, 9), clock)
   repository.registerIntegration({ id: 'integration-codex-1', agent: 'codex-cli', adapterVersion: '1.0.0', installedVersion: '0.144.3', freshnessWindowSeconds: 120 })
+  repository.registerIntegration({
+    id: 'integration-codex-desktop-1',
+    agentFamily: 'codex',
+    executionSurface: 'codex-desktop',
+    adapterVersion: '2.0.0',
+    installedVersion: '1.2.3',
+    freshnessWindowSeconds: 120,
+  })
   return { database, operational, repository, service: new AgentActivityService(repository, clock), setNow: (value: string) => { now = new Date(value) } }
 }
 
@@ -46,7 +54,61 @@ function event(sequence: number, kind: AssignmentEventV1['observation']['kind'],
   })
 }
 
+function v2Event(options: {
+  id?: string
+  assignmentId?: string
+  observedAt?: string
+  targetRef?: AssignmentEventV2['assignment']['targetRef']
+} = {}): AssignmentEventV2 {
+  const base = assignmentEventV2Fixture()
+  return {
+    ...base,
+    eventId: options.id ?? base.eventId,
+    assignment: {
+      ...base.assignment,
+      originAssignmentId: options.assignmentId ?? base.assignment.originAssignmentId,
+      ...(options.targetRef ? { targetRef: options.targetRef } : {}),
+    },
+    observation: {
+      ...base.observation,
+      observedAt: options.observedAt ?? base.observation.observedAt,
+    },
+  }
+}
+
 describe('AgentActivityService lifecycle ordering', () => {
+  it('parses and accepts normalized v1/v2 events while preserving identity and service rejection behavior', async () => {
+    const { database, repository, service } = await fixture()
+    const legacy = event(1, 'started', { assignmentId: 'service-v1-identity' })
+    const legacyReceipt = service.ingest(legacy)
+    expect(legacyReceipt.assignmentKey).toBe(repository.assignmentKeyFor(legacy))
+
+    const precise = v2Event()
+    const normalized = parseAssignmentEvent(precise)
+    const preciseReceipt = service.ingestValidated(normalized.event, normalized.receiptCodes)
+    expect(preciseReceipt).toMatchObject({
+      outcome: 'applied',
+      assignmentKey: repository.assignmentKeyFor(precise),
+    })
+    expect(repository.getAssignment(preciseReceipt.assignmentKey)).toMatchObject({
+      agentFamily: 'codex',
+      executionSurface: 'codex-desktop',
+      modelLabel: 'openai/gpt-5-codex',
+    })
+
+    expect(service.ingest(v2Event({
+      id: '028f6f7e-6f52-7e54-8aa5-000000000091',
+      assignmentId: 'service-v2-future',
+      observedAt: '2026-07-14T17:06:02.000Z',
+    }))).toMatchObject({ outcome: 'rejected', reasonCode: 'CLOCK_SKEW' })
+    expect(service.ingest(v2Event({
+      id: '028f6f7e-6f52-7e54-8aa5-000000000092',
+      assignmentId: 'service-v2-target',
+      targetRef: { kind: 'ticket', ticketId: 'target-without-resolver' },
+    }))).toMatchObject({ outcome: 'rejected', reasonCode: 'TARGET_RESOLVER_UNAVAILABLE' })
+    database.close()
+  })
+
   it('quarantines a gap, applies the missing event, and drains contiguous pending work atomically', async () => {
     const { database, operational, repository, service } = await fixture()
     const started = service.ingest(event(1, 'started'))

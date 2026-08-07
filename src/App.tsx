@@ -85,7 +85,7 @@ export default function App({ operationalRepository }: { operationalRepository: 
   const [agentAssignmentCursor, setAgentAssignmentCursor] = useState<string | null>(null)
   const [agentIntegrations, setAgentIntegrations] = useState<AgentActivityIntegrationDto[]>([])
   const [agentProjects, setAgentProjects] = useState<ProjectFolderSummaryDto[]>([])
-  const [agentActivityLoading, setAgentActivityLoading] = useState(false)
+  const [agentActivityLoading, setAgentActivityLoading] = useState(Boolean(operationalRepository.listAgentActivityAssignments))
   const [agentActivityError, setAgentActivityError] = useState<string>()
 
   useEffect(() => { saveCompletedWorkPreference(window.localStorage, { mode: ticketMode, preset: completedPreset }) }, [completedPreset, ticketMode])
@@ -554,6 +554,11 @@ export default function App({ operationalRepository }: { operationalRepository: 
                         onSelectedIdChange={setSelectedAttentionId}
                         onAction={handleAttentionAction}
                         onHomeViewChange={handleHomeViewChange}
+                        agentIntegrations={agentIntegrations}
+                        agentAssignmentCount={agentAssignments.length}
+                        agentActivityLoading={agentActivityLoading}
+                        agentActivityError={agentActivityError}
+                        onOpenPrivacy={() => handleNavigate('settings')}
                       />
                   )}
 

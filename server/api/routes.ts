@@ -323,7 +323,7 @@ async function handleApi(
       const cursor = url.searchParams.get('cursor')
       sendJson(response, 200, apiSuccess(dependencies.activityManagement?.listAssignments({ scope: scopeValue as 'active' | 'terminal' | 'all', limit, cursor }) ?? { items: [], nextCursor: null, total: 0, scope: scopeValue })); return
     } catch (cause) {
-      sendJson(response, 400, apiFailure({ code: 'INVALID_REQUEST', message: cause instanceof Error ? cause.message : 'Assignment page request failed.', retryable: false })); return
+      sendActivityFailure(response, cause, 'ACTIVITY_REQUEST_INVALID'); return
     }
   }
   const activityAssignmentMatch = url.pathname.match(/^\/api\/v1\/agent-activity\/assignments\/([a-f0-9]{64})$/)
@@ -351,8 +351,7 @@ async function handleApi(
       })
       sendJson(response, 200, apiSuccess(updated)); return
     } catch (cause) {
-      const conflict = cause instanceof Error && cause.message === 'RECORD_CHANGED'
-      sendJson(response, conflict ? 409 : 400, apiFailure({ code: conflict ? 'RECORD_CHANGED' : 'INVALID_REQUEST', message: conflict ? 'This assignment changed. Refresh it before saving.' : cause instanceof Error ? cause.message : 'Assignment update failed.', retryable: conflict })); return
+      sendActivityFailure(response, cause, 'ACTIVITY_REQUEST_INVALID'); return
     }
   }
   if (url.pathname === '/api/v1/agent-activity/project-candidates' && request.method === 'GET') {
@@ -367,7 +366,7 @@ async function handleApi(
   if (url.pathname === '/api/v1/agent-activity/project-candidates/commit' && request.method === 'POST') {
     if (!authorizePrivate(request, response, dependencies)) return
     try { const body = await readJsonBody(request); if (typeof body.previewId !== 'string') throw new Error('INVALID_REQUEST'); sendJson(response, 200, apiSuccess(dependencies.activityManagement?.commitProjectCandidates(body.previewId, body.confirmed === true) ?? { committed: false, folderIds: [], errorCode: 'PROJECT_REGISTRY_UNAVAILABLE' })) }
-    catch (cause) { sendJson(response, 400, apiFailure({ code: 'INVALID_REQUEST', message: cause instanceof Error ? cause.message : 'Project candidate commit failed.', retryable: false })) }
+    catch (cause) { sendActivityFailure(response, cause, 'ACTIVITY_REQUEST_INVALID') }
     return
   }
   if (url.pathname === '/api/v1/agent-activity/project-reviews' && request.method === 'GET') {
@@ -378,7 +377,7 @@ async function handleApi(
   if (activityReviewMatch && request.method === 'POST') {
     if (!authorizePrivate(request, response, dependencies)) return
     try { const body = await readJsonBody(request); const projectId = body.projectId === null || typeof body.projectId === 'string' ? body.projectId as string | null : null; if (!dependencies.activityManagement) throw new Error('ACTIVITY_MANAGEMENT_UNAVAILABLE'); sendJson(response, 200, apiSuccess(dependencies.activityManagement.resolveReview(decodeURIComponent(activityReviewMatch[1]), projectId, body.confirmed === true))) }
-    catch (cause) { sendJson(response, 400, apiFailure({ code: 'INVALID_REQUEST', message: cause instanceof Error ? cause.message : 'Project review failed.', retryable: false })) }
+    catch (cause) { sendActivityFailure(response, cause, 'ACTIVITY_REQUEST_INVALID') }
     return
   }
   const activityManagementMatch = url.pathname.match(/^\/api\/v1\/agent-activity\/integrations\/([^/]+)\/(enable|test|pause|reconnect|remove|snapshot|clear-history)$/)
@@ -386,7 +385,13 @@ async function handleApi(
     if (!authorizePrivate(request, response, dependencies)) return
     try {
       if (!dependencies.activityManagement) throw new Error('ACTIVITY_MANAGEMENT_UNAVAILABLE')
-      const body = await readJsonBody(request); const id = decodeURIComponent(activityManagementMatch[1]); const action = activityManagementMatch[2]; const confirmed = body.confirmed === true
+      const body = await readJsonBody(request)
+      const id = decodeURIComponent(activityManagementMatch[1])
+      const action = activityManagementMatch[2]
+      const mutation = action === 'enable' || action === 'pause' || action === 'reconnect' || action === 'remove' || action === 'clear-history'
+      if (!hasExactRequestKeys(body, mutation ? ['confirmed'] : [])) throw new Error('ACTIVITY_REQUEST_INVALID')
+      if (mutation && typeof body.confirmed !== 'boolean') throw new Error('ACTIVITY_REQUEST_INVALID')
+      const confirmed = body.confirmed === true
       const result = action === 'enable' ? await dependencies.activityManagement.enable(id, confirmed)
         : action === 'test' ? await dependencies.activityManagement.test(id)
           : action === 'pause' ? await dependencies.activityManagement.pause(id, confirmed)
@@ -395,7 +400,7 @@ async function handleApi(
                 : action === 'snapshot' ? await dependencies.activityManagement.snapshot(id)
                   : dependencies.activityManagement.clearHistory(id, confirmed)
       sendJson(response, 200, apiSuccess(result))
-    } catch (cause) { sendJson(response, 400, apiFailure({ code: 'INVALID_REQUEST', message: cause instanceof Error ? cause.message : 'Agent activity action failed.', retryable: false })) }
+    } catch (cause) { sendActivityFailure(response, cause, 'ACTIVITY_ACTION_FAILED') }
     return
   }
 
@@ -1183,6 +1188,34 @@ function auditPairing(dependencies: RouteDependencies, action: string, reasonCod
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function hasExactRequestKeys(value: unknown, expected: readonly string[]): value is Record<string, unknown> {
+  if (!isRecord(value)) return false
+  const keys = Object.keys(value)
+  return keys.length === expected.length && keys.every((key) => expected.includes(key))
+}
+
+function sendActivityFailure(response: ServerResponse, cause: unknown, fallbackCode: 'ACTIVITY_REQUEST_INVALID' | 'ACTIVITY_ACTION_FAILED'): void {
+  const message = cause instanceof Error ? cause.message : ''
+  if (message === 'RECORD_CHANGED') {
+    sendJson(response, 409, apiFailure({ code: 'RECORD_CHANGED', message: 'This activity record changed. Refresh it before retrying.', retryable: true }))
+    return
+  }
+  if (message === 'ACTIVITY_INTEGRATION_NOT_FOUND' || message === 'ACTIVITY_ASSIGNMENT_NOT_FOUND' || message === 'PROJECT_REVIEW_NOT_FOUND') {
+    sendJson(response, 404, apiFailure({ code: 'ACTIVITY_NOT_FOUND', message: 'The requested activity record was not found.', retryable: false }))
+    return
+  }
+  if (message === 'LOCAL_CONFIRMATION_REQUIRED') {
+    sendJson(response, 400, apiFailure({ code: 'LOCAL_CONFIRMATION_REQUIRED', message: 'Explicit local confirmation is required.', retryable: false }))
+    return
+  }
+  const code = message === 'ACTIVITY_REQUEST_INVALID' || message.startsWith('INVALID_') ? 'ACTIVITY_REQUEST_INVALID' : fallbackCode
+  sendJson(response, 400, apiFailure({
+    code,
+    message: code === 'ACTIVITY_REQUEST_INVALID' ? 'The activity request shape is invalid.' : 'The activity action could not be completed safely.',
+    retryable: false,
+  }))
 }
 
 function routingInput(body: Record<string, unknown>) {

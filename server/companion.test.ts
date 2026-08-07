@@ -155,6 +155,38 @@ describe('loopback companion shell', () => {
     const pair = await fetch(`${base}/pairing/session`, { method: 'POST', headers: apiHeaders(companion, { 'content-type': 'application/json' }), body: JSON.stringify({ code: companion.pairingCode, browserNonce }) })
     const browserToken = ((await pair.json()) as { data: { token: string } }).data.token
     const browserHeaders = apiHeaders(companion, { authorization: `Bearer ${browserToken}`, 'x-findmnemo-browser-nonce': browserNonce, 'content-type': 'application/json' })
+    const integrations = await fetch(`${base}/agent-activity/integrations`, { headers: browserHeaders })
+    const integrationBody = await integrations.json() as { data: Array<{ id: string; executionSurface: string }> }
+    expect(integrationBody.data).toHaveLength(6)
+    expect(integrationBody.data.map((item) => item.id)).toEqual([
+      'surface:claude-desktop-code',
+      'surface:claude-desktop-home',
+      'surface:claude-code-cli',
+      'surface:codex-desktop',
+      'surface:codex-cli',
+      'surface:pi-cli',
+    ])
+    const privateAction = await fetch(`${base}/agent-activity/integrations/${encodeURIComponent('surface:codex-cli')}/enable`, {
+      method: 'POST',
+      headers: browserHeaders,
+      body: JSON.stringify({ confirmed: true, path: 'private' }),
+    })
+    expect(privateAction.status).toBe(400)
+    expect(await privateAction.json()).toMatchObject({ error: { code: 'ACTIVITY_REQUEST_INVALID', message: 'The activity request shape is invalid.' } })
+    const unknownTestField = await fetch(`${base}/agent-activity/integrations/${encodeURIComponent('surface:codex-cli')}/test`, {
+      method: 'POST',
+      headers: browserHeaders,
+      body: JSON.stringify({ family: 'codex' }),
+    })
+    expect(unknownTestField.status).toBe(400)
+    expect(await unknownTestField.json()).toMatchObject({ error: { code: 'ACTIVITY_REQUEST_INVALID', message: 'The activity request shape is invalid.' } })
+    const safeUnavailableTest = await fetch(`${base}/agent-activity/integrations/${encodeURIComponent('surface:codex-cli')}/test`, {
+      method: 'POST',
+      headers: browserHeaders,
+      body: '{}',
+    })
+    expect(safeUnavailableTest.status).toBe(200)
+    expect(await safeUnavailableTest.json()).toMatchObject({ data: { outcome: 'unavailable', changed: false } })
     const page = await fetch(`${base}/agent-activity?scope=active&limit=1`, { headers: browserHeaders })
     const pageBody = await page.json() as { data: { total: number; nextCursor: string | null; items: Array<{ id: string; summary: string; recordVersion: number }> } }
     expect(page.status).toBe(200)

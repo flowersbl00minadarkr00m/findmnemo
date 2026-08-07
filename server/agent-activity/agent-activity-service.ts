@@ -1,8 +1,14 @@
-import { parseAssignmentEventV1, type AssignmentEventReceiptCode, type AssignmentEventV1 } from '../../shared/agent-activity-contract.js'
+import {
+  normalizeAssignmentEvent,
+  parseAssignmentEvent,
+  type AssignmentEvent,
+  type AssignmentEventReceiptCode,
+  type NormalizedAssignmentEvent,
+} from '../../shared/agent-activity-contract.js'
 import { AgentActivityRepository, type AgentActivityIngestReceipt } from './agent-activity-repository.js'
 
 export interface ActivityAssociationResolver {
-  resolve(event: AssignmentEventV1): { event: AssignmentEventV1; ticketId?: string; reasonCode?: string }
+  resolve(event: NormalizedAssignmentEvent): { event: NormalizedAssignmentEvent; ticketId?: string; reasonCode?: string }
 }
 
 export class AgentActivityService {
@@ -17,11 +23,12 @@ export class AgentActivityService {
   }
 
   ingest(input: unknown): AgentActivityIngestReceipt {
-    const parsed = parseAssignmentEventV1(input)
+    const parsed = parseAssignmentEvent(input)
     return this.ingestValidated(parsed.event, parsed.receiptCodes)
   }
 
-  ingestValidated(event: AssignmentEventV1, receiptCodes: AssignmentEventReceiptCode[]): AgentActivityIngestReceipt {
+  ingestValidated(eventInput: AssignmentEvent | NormalizedAssignmentEvent, receiptCodes: AssignmentEventReceiptCode[]): AgentActivityIngestReceipt {
+    const event = isNormalizedEvent(eventInput) ? eventInput : normalizeAssignmentEvent(eventInput)
     const assignmentKey = this.repository.assignmentKeyFor(event)
     const defaultTicketId = `agent-activity:${assignmentKey.slice(0, 32)}`
     if (Date.parse(event.observation.observedAt) > this.clock().getTime() + 5 * 60_000) {
@@ -34,4 +41,8 @@ export class AgentActivityService {
     if (resolved.reasonCode) return { outcome: 'rejected', assignmentKey, ticketId: resolved.ticketId ?? defaultTicketId, receiptCodes, reasonCode: resolved.reasonCode, appliedCount: 0 }
     return this.repository.ingestValidated(resolved.event, receiptCodes, resolved.ticketId)
   }
+}
+
+function isNormalizedEvent(event: AssignmentEvent | NormalizedAssignmentEvent): event is NormalizedAssignmentEvent {
+  return 'schemaVersion' in event
 }

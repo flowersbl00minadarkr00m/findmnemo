@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { ASSIGNMENT_EVENT_MAX_BYTES, parseAssignmentEventV1 } from '../../shared/agent-activity-contract.js'
+import { ASSIGNMENT_EVENT_MAX_BYTES, parseAssignmentEvent } from '../../shared/agent-activity-contract.js'
 import { readJsonBody, validLoopbackHost } from '../api/request-security.js'
 import { sendJson } from '../api/http.js'
 import type { SafeLogger } from '../observability/logger.js'
@@ -11,9 +11,18 @@ import type { IntegrationAuthService } from './integration-auth-service.js'
 import type { ProjectAssociationService } from './project-association-service.js'
 import type { SnapshotService } from './snapshot-service.js'
 import type { AgentActivityRetentionService } from './retention-service.js'
+import { MANUAL_ACTIVITY_ADAPTER_VERSION } from './capability-manifests.js'
+import { PRECISE_ACTIVITY_CELLS, type PreciseActivityIntegrationId } from './qualifications/index.js'
+import { ReporterSanitizer } from './reporter/sanitizer.js'
 
 const ROOT = '/api/v1/integration/agent-activity'
 const INTEGRATION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/
+const MANUAL_INTEGRATION_IDS = new Set([
+  'manual:codex-cli',
+  'manual:claude-code',
+  'manual:pi',
+  ...PRECISE_ACTIVITY_CELLS.map((cell) => cell.integrationId),
+])
 
 export interface ActivityIngressDependencies {
   auth: IntegrationAuthService
@@ -39,6 +48,50 @@ export class ActivityIngress {
     this.limiter = new IntegrationRateLimiter(() => this.clock().getTime())
   }
 
+  validateOnly(input: {
+    integrationId: PreciseActivityIntegrationId
+    agentFamily: (typeof PRECISE_ACTIVITY_CELLS)[number]['agentFamily']
+    executionSurface: (typeof PRECISE_ACTIVITY_CELLS)[number]['executionSurface']
+    adapterVersion: string
+    observedAt: string
+  }): void {
+    const cell = PRECISE_ACTIVITY_CELLS.find((candidate) => candidate.integrationId === input.integrationId)
+    if (!cell || cell.agentFamily !== input.agentFamily || cell.executionSurface !== input.executionSurface) throw new Error('ACTIVITY_SAFE_TEST_BINDING_MISMATCH')
+    const sanitized = new ReporterSanitizer().sanitizeDraft({
+      eventId: randomUUID(),
+      integrationId: input.integrationId,
+      agent: input.agentFamily === 'claude' ? 'claude-code' : input.agentFamily === 'codex' ? 'codex-cli' : 'pi',
+      adapterVersion: MANUAL_ACTIVITY_ADAPTER_VERSION,
+      agentVersion: null,
+      originAssignmentId: 'validation-only',
+      generation: 1,
+      summary: { text: 'FindMnemo validation only', source: 'placeholder' },
+      projectRef: { kind: 'unassigned' },
+      kind: 'accepted',
+      reportedState: 'active',
+      observedAt: input.observedAt,
+      evidenceKind: 'mcp-tool',
+    })
+    const parsed = parseAssignmentEvent({
+      schema: 'findmnemo.assignment-event.v2',
+      eventId: sanitized.eventId,
+      integrationId: input.integrationId,
+      agentFamily: input.agentFamily,
+      executionSurface: input.executionSurface,
+      adapterVersion: input.adapterVersion,
+      agentVersion: null,
+      assignment: sanitized.assignment,
+      observation: sanitized.observation,
+      model: null,
+    })
+    this.dependencies.capabilities.validate(parsed.event)
+    if (
+      parsed.event.integrationId !== input.integrationId ||
+      parsed.event.agentFamily !== input.agentFamily ||
+      parsed.event.executionSurface !== input.executionSurface
+    ) throw new Error('ACTIVITY_SAFE_TEST_BINDING_MISMATCH')
+  }
+
   async handle(request: IncomingMessage, response: ServerResponse, url: URL): Promise<boolean> {
     if (!url.pathname.startsWith(`${ROOT}/`)) return false
     const startedAt = Date.now()
@@ -61,7 +114,7 @@ export class ActivityIngress {
     const body = await readJsonBody(request, ASSIGNMENT_EVENT_MAX_BYTES)
     const integrationId = integrationIdFrom(body.integrationId)
     if (!await this.authenticate(request, integrationId, response, startedAt) || !this.captureEnabled(integrationId, response, startedAt) || !this.allow(integrationId, response, startedAt)) return
-    const parsed = parseAssignmentEventV1(body)
+    const parsed = parseAssignmentEvent(body)
     this.dependencies.capabilities.validate(parsed.event)
     const receipt = this.dependencies.activities.ingestValidated(parsed.event, parsed.receiptCodes)
     if (receipt.outcome === 'applied') {
@@ -110,7 +163,7 @@ export class ActivityIngress {
   }
 
   private captureEnabled(integrationId: string, response: ServerResponse, startedAt: number): boolean {
-    if (integrationId.startsWith('manual:') || !this.dependencies.featureEnabled || this.dependencies.featureEnabled()) return true
+    if (MANUAL_INTEGRATION_IDS.has(integrationId) || !this.dependencies.featureEnabled || this.dependencies.featureEnabled()) return true
     this.reject(response, 503, 'ACTIVITY_CAPTURE_DISABLED', startedAt)
     return false
   }

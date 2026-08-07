@@ -4,7 +4,7 @@ import type {
   AgentActivityAssignmentSummaryDto,
   AgentActivityAssignmentUpdateDto,
 } from '../../shared/companion-contract.js'
-import { assertAgentActivityBrowserSafe } from '../../shared/companion-contract.js'
+import { assertAgentActivityAssignmentSummaryDto, assertAgentActivityBrowserSafe } from '../../shared/companion-contract.js'
 import { AgentActivityRepository, type AssignmentListRecord, type BrowserSafeAssignment } from './agent-activity-repository.js'
 
 export interface AssignmentCoverageProjection extends BrowserSafeAssignment {
@@ -68,12 +68,15 @@ export class AgentActivityCoverageService {
 
   private dto(assignment: AssignmentListRecord): AgentActivityAssignmentSummaryDto {
     const projected = this.project(assignment)
-    return {
+    const dto: AgentActivityAssignmentSummaryDto = {
       id: assignment.assignmentKey,
       integrationId: assignment.integrationId,
       ticketId: assignment.ticketId,
-      agent: assignment.agent,
-      agentLabel: agentLabel(assignment.agent),
+      agent: legacyAgentForFamily(assignment.agentFamily),
+      agentLabel: familyLabel(assignment.agentFamily),
+      agentFamily: assignment.agentFamily,
+      executionSurface: assignment.executionSurface,
+      surfaceLabel: surfaceLabel(assignment.executionSurface),
       summary: assignment.safeSummary,
       summaryOwner: assignment.summaryOwner,
       project: assignment.projectRef.kind === 'approved-project'
@@ -83,6 +86,8 @@ export class AgentActivityCoverageService {
           : { kind: 'unassigned' },
       projectOwner: assignment.projectOwner,
       modelLabel: assignment.modelLabel,
+      modelSource: assignment.modelSource,
+      modelConfidence: assignment.modelConfidence,
       effectiveState: projected.effectiveState,
       retainedLastState: assignment.reportedState,
       lastObservedAt: assignment.lastObservedAt,
@@ -95,6 +100,8 @@ export class AgentActivityCoverageService {
       recordVersion: assignment.recordVersion,
       linkedTicketKind: assignment.linkedTicketKind,
     }
+    assertAgentActivityAssignmentSummaryDto(dto)
+    return dto
   }
 
   private project<T extends BrowserSafeAssignment>(assignment: T): T & { effectiveState: BrowserSafeAssignment['reportedState'] | 'stale' } {
@@ -108,8 +115,24 @@ export class AgentActivityCoverageService {
   }
 }
 
-function agentLabel(agent: BrowserSafeAssignment['agent']): string {
-  return agent === 'codex-cli' ? 'Codex' : agent === 'claude-code' ? 'Claude Code' : 'Pi'
+function legacyAgentForFamily(family: BrowserSafeAssignment['agentFamily']): BrowserSafeAssignment['agent'] {
+  return family === 'codex' ? 'codex-cli' : family === 'claude' ? 'claude-code' : 'pi'
+}
+
+function familyLabel(family: BrowserSafeAssignment['agentFamily']): string {
+  return family === 'codex' ? 'Codex' : family === 'claude' ? 'Claude' : 'Pi'
+}
+
+function surfaceLabel(surface: BrowserSafeAssignment['executionSurface']): string {
+  return {
+    'claude-desktop-code': 'Claude Desktop Code',
+    'claude-desktop-home': 'Claude Desktop Home',
+    'claude-code-cli': 'Claude Code CLI',
+    'codex-desktop': 'Codex Desktop',
+    'codex-cli': 'Codex CLI',
+    'pi-cli': 'Pi CLI',
+    'legacy-ambiguous': 'Legacy / ambiguous surface',
+  }[surface]
 }
 
 function encodeCursor(assignment: BrowserSafeAssignment): string {

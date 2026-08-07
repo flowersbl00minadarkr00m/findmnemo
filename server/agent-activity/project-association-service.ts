@@ -2,12 +2,12 @@ import { randomUUID } from 'node:crypto'
 import { realpathSync } from 'node:fs'
 import { relative, resolve } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
-import type { AssignmentEventV1 } from '../../shared/agent-activity-contract.js'
+import type { NormalizedAssignmentEvent } from '../../shared/agent-activity-contract.js'
 import type { OperationalRepository, StoredTicket } from '../db/operational-repository.js'
 import type { ProjectFolderRecord, ProjectFolderRepository } from '../onboarding/project-folder-repository.js'
 import type { ActivityAssociationResolver } from './agent-activity-service.js'
 
-export type ProjectContextResult = AssignmentEventV1['assignment']['projectRef']
+export type ProjectContextResult = NormalizedAssignmentEvent['assignment']['projectRef']
 
 export class ProjectAssociationService implements ActivityAssociationResolver {
   private readonly db: DatabaseSync
@@ -37,7 +37,7 @@ export class ProjectAssociationService implements ActivityAssociationResolver {
     return { kind: 'approved-project', id: winners[0].folder.id }
   }
 
-  resolve(event: AssignmentEventV1): { event: AssignmentEventV1; ticketId?: string; reasonCode?: string } {
+  resolve(event: NormalizedAssignmentEvent): { event: NormalizedAssignmentEvent; ticketId?: string; reasonCode?: string } {
     const projectReason = this.validateProjectRef(event)
     if (projectReason) return { event, reasonCode: projectReason }
     const target = event.assignment.targetRef
@@ -58,14 +58,14 @@ export class ProjectAssociationService implements ActivityAssociationResolver {
     return { event, ticketId: ticket.id }
   }
 
-  private resolveTicket(event: AssignmentEventV1, ticketId: string): { event: AssignmentEventV1; ticketId?: string; reasonCode?: string } {
+  private resolveTicket(event: NormalizedAssignmentEvent, ticketId: string): { event: NormalizedAssignmentEvent; ticketId?: string; reasonCode?: string } {
     const ticket = this.operational.getTicket(ticketId)
     if (!ticket) return { event, ticketId, reasonCode: 'TARGET_NOT_FOUND' }
     if (isGate(ticket)) return { event, ticketId, reasonCode: 'GATE_TARGET_FORBIDDEN' }
     return { event, ticketId }
   }
 
-  private validateProjectRef(event: AssignmentEventV1): string | undefined {
+  private validateProjectRef(event: NormalizedAssignmentEvent): string | undefined {
     const project = event.assignment.projectRef
     if (project.kind === 'unassigned') return undefined
     if (project.kind === 'needs-review') {

@@ -63,6 +63,7 @@ import { AgentActivityRetentionService } from './agent-activity/retention-servic
 import { AgentActivityRolloutService } from './agent-activity/rollout-service.js'
 import { AgentActivityDiagnosticsService } from './agent-activity/diagnostics-service.js'
 import { detectWindowsAgentActivityStatus } from './agent-activity/windows-agent-detector.js'
+import { SurfaceQualificationRegistry } from './agent-activity/qualifications/index.js'
 
 export const COMPANION_HOST = '127.0.0.1' as const
 export const COMPANION_PORT = 3210
@@ -209,13 +210,14 @@ export async function startCompanion({
     const auth = new IntegrationAuthService(database.db, resolvedActivitySecretStore)
     const rollout = new AgentActivityRolloutService({ database, auth, store: resolvedActivitySecretStore, setup: activitySetup, clock })
     const capabilities = new ActivityCapabilityRegistry(database.db)
+    const qualifications = new SurfaceQualificationRegistry()
     const repository = new AgentActivityRepository(database.db, operationalRepository, ticketLifecycleService, await auth.identityKey(), clock)
     const associations = new ProjectAssociationService(database.db, projectFolderRepository, operationalRepository, clock)
     const activities = new AgentActivityService(repository, clock, associations)
     const snapshots = new SnapshotService(database.db, clock)
     const manual = new ManualReportingService({ repository, activities, capabilities, snapshots, clock })
     const retention = new AgentActivityRetentionService(database, { clock })
-    activityDiagnostics = new AgentActivityDiagnosticsService(database.db, clock)
+    activityDiagnostics = new AgentActivityDiagnosticsService(database.db, clock, qualifications)
     try {
       const result = retention.prune()
       await logger.write({ level: 'info', code: 'ACTIVITY_RETENTION_COMPLETE', sourceId: 'agent-activity', count: result.retainedTotal })
@@ -229,6 +231,7 @@ export async function startCompanion({
     activityIngress = new ActivityIngress({ auth, capabilities, activities, associations, repository, snapshots, logger, retention, featureEnabled: () => rollout.isEnabled(), clock })
     activityManagement = new AgentActivityManagementService({
       db: database.db, auth, capabilities, snapshots, store: resolvedActivitySecretStore, setup: activitySetup, clock,
+      qualifications, validationIngress: activityIngress,
       coverage: new AgentActivityCoverageService(repository, clock),
       rollout,
       detectStatus: process.platform === 'win32' ? detectWindowsAgentActivityStatus : async () => ({

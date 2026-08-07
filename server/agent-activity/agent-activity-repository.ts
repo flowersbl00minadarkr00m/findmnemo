@@ -1,11 +1,17 @@
 import { createHmac } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import {
-  parseAssignmentEventV1,
+  PRECISE_EXECUTION_SURFACES,
+  normalizeAssignmentEvent,
+  parseAssignmentEvent,
+  type AgentFamily,
   type AgentKind,
+  type AssignmentEvent,
   type AssignmentEventReceiptCode,
-  type AssignmentEventV1,
   type AssignmentEvidenceKind,
+  type ExecutionSurface,
+  type NormalizedAssignmentEvent,
+  type PreciseExecutionSurface,
   type SummarySource,
 } from '../../shared/agent-activity-contract.js'
 import type { OperationalRepository, StoredTicket } from '../db/operational-repository.js'
@@ -13,7 +19,9 @@ import type { TicketLifecycleService } from '../tickets/ticket-lifecycle-service
 
 export interface AgentActivityIntegrationInput {
   id: string
-  agent: AgentKind
+  agent?: AgentKind
+  agentFamily?: AgentFamily
+  executionSurface?: PreciseExecutionSurface
   adapterVersion: string
   installedVersion: string | null
   enabled?: boolean
@@ -39,6 +47,8 @@ export interface BrowserSafeAssignment {
   integrationId: string
   ticketId: string
   agent: AgentKind
+  agentFamily: AgentFamily
+  executionSurface: ExecutionSurface
   generation: number
   safeSummary: string
   summarySource: SummarySource
@@ -49,6 +59,8 @@ export interface BrowserSafeAssignment {
     | { kind: 'needs-review'; reviewToken: string }
   projectOwner: 'source' | 'human'
   modelLabel: string | null
+  modelSource: 'host-reported' | null
+  modelConfidence: 'reported' | null
   reportedState: 'active' | 'waiting' | 'blocked' | 'needs-action' | 'completed' | 'failed' | 'cancelled'
   lastAppliedSequence: number
   lastObservedAt: string
@@ -76,19 +88,26 @@ export interface AssignmentListRecord extends BrowserSafeAssignment {
 interface EventProjection {
   eventId: string
   sequence: number
-  kind: AssignmentEventV1['observation']['kind']
-  reportedState: AssignmentEventV1['observation']['reportedState']
+  kind: NormalizedAssignmentEvent['observation']['kind']
+  reportedState: NormalizedAssignmentEvent['observation']['reportedState']
   observedAt: string
-  reasonCode: AssignmentEventV1['observation']['reasonCode']
+  reasonCode: NormalizedAssignmentEvent['observation']['reasonCode']
   evidenceKind: AssignmentEvidenceKind
   evidenceKey: string | null
   safeSummary: string
   summarySource: SummarySource
-  projectRef: AssignmentEventV1['assignment']['projectRef']
+  projectRef: NormalizedAssignmentEvent['assignment']['projectRef']
+  agentFamily: AgentFamily
+  executionSurface: ExecutionSurface
   modelLabel: string | null
+  modelSource: 'host-reported' | null
+  modelConfidence: 'reported' | null
   terminalEvidenceKind: string | null
   terminalOutcome: 'completed' | 'failed' | 'cancelled' | null
 }
+
+export const ASSIGNMENT_IDENTITY_DOMAIN_V1 = 'assignment'
+export const ASSIGNMENT_IDENTITY_DOMAIN_V2 = 'findmnemo.assignment-identity.v2'
 
 export class AgentActivityRepository {
   private readonly db: DatabaseSync
@@ -114,16 +133,28 @@ export class AgentActivityRepository {
 
   registerIntegration(input: AgentActivityIntegrationInput): void {
     const now = this.clock().toISOString()
+    const identity = integrationIdentity(input)
+    const existing = this.db.prepare(`SELECT agent_kind,agent_family,execution_surface
+      FROM agent_activity_integrations WHERE id=?`).get(input.id) as Record<string, unknown> | undefined
+    if (
+      existing &&
+      (
+        String(existing.agent_kind) !== identity.agent ||
+        String(existing.agent_family) !== identity.agentFamily ||
+        String(existing.execution_surface) !== identity.executionSurface
+      )
+    ) throw new Error('ACTIVITY_INTEGRATION_REBIND')
     this.db.prepare(`INSERT INTO agent_activity_integrations(
-      id,agent_kind,adapter_version,installed_version,enabled,configured,support_level,
+      id,agent_kind,agent_family,execution_surface,adapter_version,installed_version,enabled,configured,support_level,
       freshness_profile,heartbeat_seconds,freshness_window_seconds,created_at,updated_at
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
-    ON CONFLICT(id) DO UPDATE SET agent_kind=excluded.agent_kind,adapter_version=excluded.adapter_version,
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(id) DO UPDATE SET adapter_version=excluded.adapter_version,
       installed_version=excluded.installed_version,enabled=excluded.enabled,configured=excluded.configured,
       support_level=excluded.support_level,freshness_profile=excluded.freshness_profile,
       heartbeat_seconds=excluded.heartbeat_seconds,freshness_window_seconds=excluded.freshness_window_seconds,updated_at=excluded.updated_at`)
       .run(
-        input.id, input.agent, input.adapterVersion, input.installedVersion, input.enabled === false ? 0 : 1,
+        input.id, identity.agent, identity.agentFamily, identity.executionSurface, input.adapterVersion,
+        input.installedVersion, input.enabled === false ? 0 : 1,
         input.configured === false ? 0 : 1, input.supportLevel ?? 'manual', input.freshnessProfile ?? 'manual',
         input.heartbeatSeconds ?? null, input.freshnessWindowSeconds ?? 1_800, now, now,
       )
@@ -134,11 +165,12 @@ export class AgentActivityRepository {
   }
 
   ingest(input: unknown): AgentActivityIngestReceipt {
-    const parsed = parseAssignmentEventV1(input)
+    const parsed = parseAssignmentEvent(input)
     return this.ingestValidated(parsed.event, parsed.receiptCodes)
   }
 
-  ingestValidated(event: AssignmentEventV1, receiptCodes: AssignmentEventReceiptCode[], targetTicketId?: string): AgentActivityIngestReceipt {
+  ingestValidated(eventInput: AssignmentEvent | NormalizedAssignmentEvent, receiptCodes: AssignmentEventReceiptCode[], targetTicketId?: string): AgentActivityIngestReceipt {
+    const event = isNormalizedEvent(eventInput) ? eventInput : normalizeAssignmentEvent(eventInput)
     const assignmentKey = this.assignmentKeyFor(event)
     const ticketId = ticketIdFor(assignmentKey)
 
@@ -147,14 +179,25 @@ export class AgentActivityRepository {
       if (duplicate?.assignment_key) {
         const existing = this.db.prepare('SELECT ticket_id FROM agent_assignments WHERE assignment_key=?').get(duplicate.assignment_key) as { ticket_id?: string } | undefined
         if (!existing?.ticket_id) throw new Error('ACTIVITY_EVENT_INTEGRITY_ERROR')
-        const receiptCodes: AssignmentEventReceiptCode[] = duplicate.receipt_code === 'SUMMARY_MINIMIZED' ? ['SUMMARY_MINIMIZED'] : []
-        return { outcome: 'duplicate', assignmentKey: duplicate.assignment_key, ticketId: existing.ticket_id, receiptCodes }
+        return {
+          outcome: 'duplicate',
+          assignmentKey: duplicate.assignment_key,
+          ticketId: existing.ticket_id,
+          receiptCodes: deserializeReceiptCodes(duplicate.receipt_code),
+        }
       }
 
-      const integration = this.db.prepare(`SELECT agent_kind,adapter_version,enabled,configured,freshness_window_seconds
+      const integration = this.db.prepare(`SELECT agent_kind,agent_family,execution_surface,adapter_version,enabled,configured,freshness_window_seconds
         FROM agent_activity_integrations WHERE id=?`).get(event.integrationId) as Record<string, unknown> | undefined
       if (!integration || !integration.enabled || !integration.configured) throw new Error('ACTIVITY_INTEGRATION_NOT_ENABLED')
-      if (integration.agent_kind !== event.agent || integration.adapter_version !== event.adapterVersion) throw new Error('ACTIVITY_INTEGRATION_MISMATCH')
+      if (
+        integration.agent_kind !== event.agent ||
+        integration.adapter_version !== event.adapterVersion ||
+        (
+          event.schemaVersion === 'v2' &&
+          (integration.agent_family !== event.agentFamily || integration.execution_surface !== event.executionSurface)
+        )
+      ) throw new Error('ACTIVITY_INTEGRATION_MISMATCH')
       const now = this.clock().toISOString()
       const projection = this.projection(event, assignmentKey)
       const existing = this.assignmentRow(assignmentKey)
@@ -177,11 +220,11 @@ export class AgentActivityRepository {
         const assignmentPending = Number((this.db.prepare("SELECT count(*) AS count FROM agent_assignment_events WHERE assignment_key=? AND apply_state='pending-gap'").get(assignmentKey) as { count: number }).count)
         const totalPending = Number((this.db.prepare("SELECT count(*) AS count FROM agent_assignment_events WHERE apply_state='pending-gap'").get() as { count: number }).count)
         if (assignmentPending >= 32 || totalPending >= 512) return { outcome: 'rejected', assignmentKey, ticketId: existingTicketId, receiptCodes, expectedSequence, reasonCode: 'PENDING_LIMIT', appliedCount: 0 }
-        this.insertEvent(assignmentKey, projection, 'pending-gap', receiptCodes[0] ?? null, now)
+        this.insertEvent(assignmentKey, projection, 'pending-gap', serializeReceiptCodes(receiptCodes), now)
         return { outcome: 'gap', assignmentKey, ticketId: existingTicketId, receiptCodes, expectedSequence, reasonCode: 'SEQUENCE_GAP', appliedCount: 0 }
       }
 
-      this.insertEvent(assignmentKey, projection, 'applied', receiptCodes[0] ?? null, now)
+      this.insertEvent(assignmentKey, projection, 'applied', serializeReceiptCodes(receiptCodes), now)
       this.applyProjection(assignmentKey, projection, Number(integration.freshness_window_seconds), now)
       let appliedCount = 1
       while (true) {
@@ -250,7 +293,7 @@ export class AgentActivityRepository {
     })
   }
 
-  private createFirst(event: AssignmentEventV1, projection: EventProjection, receiptCodes: AssignmentEventReceiptCode[], targetTicketId: string, freshnessWindowSeconds: number, now: string): AgentActivityIngestReceipt {
+  private createFirst(event: NormalizedAssignmentEvent, projection: EventProjection, receiptCodes: AssignmentEventReceiptCode[], targetTicketId: string, freshnessWindowSeconds: number, now: string): AgentActivityIngestReceipt {
     const assignmentKey = this.assignmentKeyFor(event)
     if (projection.sequence !== 1) return { outcome: 'rejected', assignmentKey, ticketId: targetTicketId, receiptCodes, expectedSequence: 1, reasonCode: 'FIRST_SEQUENCE_REQUIRED', appliedCount: 0 }
     const state = nextReportedState(projection, 'active')
@@ -263,22 +306,24 @@ export class AgentActivityRepository {
     }
     this.operational.linkTicketSource(ticket.id, 'agent-activity', assignmentKey, `agent-activity://${encodeURIComponent(event.integrationId)}/${assignmentKey}`)
     this.db.prepare(`INSERT INTO agent_assignments(
-      assignment_key,integration_id,agent_kind,generation,ticket_id,last_applied_sequence,last_event_id,
+      assignment_key,integration_id,agent_kind,agent_family,execution_surface,generation,ticket_id,last_applied_sequence,last_event_id,
       reported_state,safe_summary,summary_source,summary_owner,project_mapping_state,project_id,
-      project_review_token,project_owner,model_label,last_observed_at,fresh_until,terminal_at,
+      project_review_token,project_owner,model_label,model_source,model_confidence,last_observed_at,fresh_until,terminal_at,
       terminal_evidence_kind,terminal_outcome,source_update_policy,record_version,created_at,updated_at
-    ) VALUES(?,?,?,?,?,1,?,?,?,?,'source',?,?,?,'source',?,?,?,?,?,?,'follow',1,?,?)`)
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
       .run(
-        assignmentKey, event.integrationId, event.agent, event.assignment.generation, ticket.id, projection.eventId, state,
-        projection.safeSummary, projection.summarySource, project.state, project.id, project.reviewToken, projection.modelLabel,
-        projection.observedAt, freshUntil, terminalState(state) ? projection.observedAt : null,
-        projection.terminalEvidenceKind, projection.terminalOutcome, now, now,
+        assignmentKey, event.integrationId, event.agent, event.agentFamily, event.executionSurface,
+        event.assignment.generation, ticket.id, 1, projection.eventId, state, projection.safeSummary,
+        projection.summarySource, 'source', project.state, project.id, project.reviewToken, 'source',
+        projection.modelLabel, projection.modelSource, projection.modelConfidence, projection.observedAt,
+        freshUntil, terminalState(state) ? projection.observedAt : null, projection.terminalEvidenceKind,
+        projection.terminalOutcome, 'follow', 1, now, now,
       )
     if (projection.projectRef.kind === 'needs-review') {
       this.db.prepare("UPDATE agent_project_reviews SET assignment_key=? WHERE review_token=? AND integration_id=? AND state='pending'")
         .run(assignmentKey, projection.projectRef.reviewToken, event.integrationId)
     }
-    this.insertEvent(assignmentKey, projection, 'applied', receiptCodes[0] ?? null, now)
+    this.insertEvent(assignmentKey, projection, 'applied', serializeReceiptCodes(receiptCodes), now)
     if (ticket.id !== ticketIdFor(assignmentKey)) this.syncTicket(this.assignmentRow(assignmentKey)!, projection, state)
     this.updateIntegration(event.integrationId, projection.observedAt, now)
     return { outcome: 'applied', assignmentKey, ticketId: ticket.id, receiptCodes }
@@ -296,12 +341,16 @@ export class AgentActivityRepository {
     const summarySource = String(current.summary_owner) === 'human' ? String(current.summary_source) : projection.summarySource
     const isTerminal = terminalState(state)
     this.db.prepare(`UPDATE agent_assignments SET last_applied_sequence=?,last_event_id=?,reported_state=?,safe_summary=?,
-      summary_source=?,project_mapping_state=?,project_id=?,project_review_token=?,model_label=?,last_observed_at=?,
+      summary_source=?,project_mapping_state=?,project_id=?,project_review_token=?,model_label=?,model_source=?,
+      model_confidence=?,last_observed_at=?,
       fresh_until=?,terminal_at=?,terminal_evidence_kind=?,terminal_outcome=?,record_version=record_version+1,updated_at=?
       WHERE assignment_key=?`)
       .run(
         projection.sequence, projection.eventId, state, safeSummary, summarySource, project.state, project.id, project.reviewToken,
-        projection.modelLabel ?? (current.model_label ? String(current.model_label) : null), projection.observedAt,
+        projection.modelLabel ?? (current.model_label ? String(current.model_label) : null),
+        projection.modelLabel ? projection.modelSource : current.model_source ? String(current.model_source) : null,
+        projection.modelLabel ? projection.modelConfidence : current.model_confidence ? String(current.model_confidence) : null,
+        projection.observedAt,
         isTerminal ? null : addSeconds(projection.observedAt, freshnessWindowSeconds),
         isTerminal ? projection.observedAt : null, projection.terminalEvidenceKind, projection.terminalOutcome, now, assignmentKey,
       )
@@ -337,18 +386,20 @@ export class AgentActivityRepository {
     const project = projectColumns(projection.projectRef)
     this.db.prepare(`INSERT INTO agent_assignment_events(
       event_id,assignment_key,sequence,event_kind,reported_state,observed_at,received_at,reason_code,
-      evidence_kind,evidence_key,safe_summary,summary_source,project_mapping_state,project_id,
-      project_review_token,apply_state,receipt_code,terminal_evidence_kind,terminal_outcome,model_label
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      evidence_kind,evidence_key,safe_summary,summary_source,project_mapping_state,project_id,project_review_token,
+      agent_family,execution_surface,apply_state,receipt_code,terminal_evidence_kind,terminal_outcome,model_label,
+      model_source,model_confidence
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
       .run(
         projection.eventId, assignmentKey, projection.sequence, projection.kind, projection.reportedState ?? null,
         projection.observedAt, receivedAt, projection.reasonCode ?? null, projection.evidenceKind, projection.evidenceKey,
-        projection.safeSummary, projection.summarySource, project.state, project.id, project.reviewToken, applyState,
-        receiptCode, projection.terminalEvidenceKind, projection.terminalOutcome, projection.modelLabel,
+        projection.safeSummary, projection.summarySource, project.state, project.id, project.reviewToken,
+        projection.agentFamily, projection.executionSurface, applyState, receiptCode, projection.terminalEvidenceKind,
+        projection.terminalOutcome, projection.modelLabel, projection.modelSource, projection.modelConfidence,
       )
   }
 
-  private projection(event: AssignmentEventV1, assignmentKey: string): EventProjection {
+  private projection(event: NormalizedAssignmentEvent, assignmentKey: string): EventProjection {
     return {
       eventId: event.eventId,
       sequence: event.observation.sequence,
@@ -361,7 +412,11 @@ export class AgentActivityRepository {
       safeSummary: event.assignment.summary.text,
       summarySource: event.assignment.summary.source,
       projectRef: event.assignment.projectRef,
-      modelLabel: event.modelLabel ?? null,
+      agentFamily: event.agentFamily,
+      executionSurface: event.executionSurface,
+      modelLabel: event.modelLabel,
+      modelSource: event.modelSource,
+      modelConfidence: event.modelConfidence,
       terminalEvidenceKind: event.observation.terminalEvidence?.kind ?? null,
       terminalOutcome: event.observation.terminalEvidence?.outcome ?? null,
     }
@@ -391,6 +446,8 @@ export class AgentActivityRepository {
       integrationId: String(row.integration_id),
       ticketId: String(row.ticket_id),
       agent: String(row.agent_kind) as AgentKind,
+      agentFamily: String(row.agent_family) as AgentFamily,
+      executionSurface: String(row.execution_surface) as ExecutionSurface,
       generation: Number(row.generation),
       safeSummary: String(row.safe_summary),
       summarySource: String(row.summary_source) as SummarySource,
@@ -398,6 +455,8 @@ export class AgentActivityRepository {
       projectRef,
       projectOwner: String(row.project_owner) as BrowserSafeAssignment['projectOwner'],
       modelLabel: row.model_label === null ? null : String(row.model_label),
+      modelSource: row.model_source ? String(row.model_source) as BrowserSafeAssignment['modelSource'] : null,
+      modelConfidence: row.model_confidence ? String(row.model_confidence) as BrowserSafeAssignment['modelConfidence'] : null,
       reportedState: String(row.reported_state) as BrowserSafeAssignment['reportedState'],
       lastAppliedSequence: Number(row.last_applied_sequence),
       lastObservedAt: String(row.last_observed_at),
@@ -435,11 +494,28 @@ export class AgentActivityRepository {
     }
   }
 
-  assignmentKeyFor(event: AssignmentEventV1): string {
-    return this.hmac('assignment', event.integrationId, event.agent, event.assignment.originAssignmentId, String(event.assignment.generation))
+  assignmentKeyFor(eventInput: AssignmentEvent | NormalizedAssignmentEvent): string {
+    const event = isNormalizedEvent(eventInput) ? eventInput : normalizeAssignmentEvent(eventInput)
+    if (event.identityVersion === 'v1') {
+      return this.hmac(
+        ASSIGNMENT_IDENTITY_DOMAIN_V1,
+        event.integrationId,
+        event.agent,
+        event.assignment.originAssignmentId,
+        String(event.assignment.generation),
+      )
+    }
+    return this.hmac(
+      ASSIGNMENT_IDENTITY_DOMAIN_V2,
+      event.integrationId,
+      event.agentFamily,
+      event.executionSurface,
+      event.assignment.originAssignmentId,
+      String(event.assignment.generation),
+    )
   }
 
-  expectedSequenceFor(event: AssignmentEventV1): number {
+  expectedSequenceFor(event: AssignmentEvent | NormalizedAssignmentEvent): number {
     const row = this.assignmentRow(this.assignmentKeyFor(event))
     return row ? Number(row.last_applied_sequence) + 1 : 1
   }
@@ -463,7 +539,7 @@ export class AgentActivityRepository {
     return createHmac('sha256', this.identityKey).update(parts.join('\0'), 'utf8').digest('hex')
   }
 
-  private ticketFor(event: AssignmentEventV1, ticketId: string, state: BrowserSafeAssignment['reportedState']): StoredTicket {
+  private ticketFor(event: NormalizedAssignmentEvent, ticketId: string, state: BrowserSafeAssignment['reportedState']): StoredTicket {
     const source = { 'codex-cli': 'Codex', 'claude-code': 'Claude Code', pi: 'Pi' }[event.agent]
     const projectId = event.assignment.projectRef.kind === 'approved-project' ? event.assignment.projectRef.id : null
     const status = compatibleTicketStatus(state)
@@ -499,7 +575,7 @@ export class AgentActivityRepository {
 
 function ticketIdFor(assignmentKey: string): string { return `agent-activity:${assignmentKey.slice(0, 32)}` }
 
-function projectColumns(projectRef: AssignmentEventV1['assignment']['projectRef']): { state: string; id: string | null; reviewToken: string | null } {
+function projectColumns(projectRef: NormalizedAssignmentEvent['assignment']['projectRef']): { state: string; id: string | null; reviewToken: string | null } {
   if (projectRef.kind === 'approved-project') return { state: projectRef.kind, id: projectRef.id, reviewToken: null }
   if (projectRef.kind === 'needs-review') return { state: projectRef.kind, id: null, reviewToken: projectRef.reviewToken }
   return { state: projectRef.kind, id: null, reviewToken: null }
@@ -507,7 +583,7 @@ function projectColumns(projectRef: AssignmentEventV1['assignment']['projectRef'
 
 function projectionFromRow(row: Record<string, unknown>): EventProjection {
   const mapping = String(row.project_mapping_state)
-  const projectRef: AssignmentEventV1['assignment']['projectRef'] = mapping === 'approved-project'
+  const projectRef: NormalizedAssignmentEvent['assignment']['projectRef'] = mapping === 'approved-project'
     ? { kind: 'approved-project', id: String(row.project_id) }
     : mapping === 'needs-review'
       ? { kind: 'needs-review', reviewToken: String(row.project_review_token) }
@@ -524,10 +600,70 @@ function projectionFromRow(row: Record<string, unknown>): EventProjection {
     safeSummary: String(row.safe_summary),
     summarySource: String(row.summary_source) as SummarySource,
     projectRef,
+    agentFamily: String(row.agent_family) as AgentFamily,
+    executionSurface: String(row.execution_surface) as ExecutionSurface,
     modelLabel: row.model_label ? String(row.model_label) : null,
+    modelSource: row.model_source ? String(row.model_source) as EventProjection['modelSource'] : null,
+    modelConfidence: row.model_confidence ? String(row.model_confidence) as EventProjection['modelConfidence'] : null,
     terminalEvidenceKind: row.terminal_evidence_kind ? String(row.terminal_evidence_kind) : null,
     terminalOutcome: row.terminal_outcome ? String(row.terminal_outcome) as EventProjection['terminalOutcome'] : null,
   }
+}
+
+function integrationIdentity(input: AgentActivityIntegrationInput): {
+  agent: AgentKind
+  agentFamily: AgentFamily
+  executionSurface: ExecutionSurface
+} {
+  if (input.agentFamily !== undefined || input.executionSurface !== undefined) {
+    if (
+      !input.agentFamily ||
+      !input.executionSurface ||
+      !PRECISE_EXECUTION_SURFACES.includes(input.executionSurface)
+    ) {
+      throw new Error('ACTIVITY_INTEGRATION_IDENTITY_INVALID')
+    }
+    const expectedFamily = familyForSurface(input.executionSurface)
+    if (expectedFamily !== input.agentFamily) throw new Error('ACTIVITY_INTEGRATION_IDENTITY_INVALID')
+    const agent = legacyAgentForFamily(input.agentFamily)
+    if (input.agent !== undefined && input.agent !== agent) throw new Error('ACTIVITY_INTEGRATION_IDENTITY_INVALID')
+    return { agent, agentFamily: input.agentFamily, executionSurface: input.executionSurface }
+  }
+  if (!input.agent) throw new Error('ACTIVITY_INTEGRATION_IDENTITY_INVALID')
+  return {
+    agent: input.agent,
+    agentFamily: familyForLegacyAgent(input.agent),
+    executionSurface: 'legacy-ambiguous',
+  }
+}
+
+function isNormalizedEvent(event: AssignmentEvent | NormalizedAssignmentEvent): event is NormalizedAssignmentEvent {
+  return 'schemaVersion' in event
+}
+
+function serializeReceiptCodes(codes: readonly AssignmentEventReceiptCode[]): string | null {
+  return codes.length === 0 ? null : codes.join(',')
+}
+
+function deserializeReceiptCodes(value: unknown): AssignmentEventReceiptCode[] {
+  if (typeof value !== 'string' || value.length === 0) return []
+  return value.split(',').filter(
+    (code): code is AssignmentEventReceiptCode => code === 'SUMMARY_MINIMIZED' || code === 'MODEL_LABEL_IGNORED',
+  )
+}
+
+function familyForLegacyAgent(agent: AgentKind): AgentFamily {
+  return { 'codex-cli': 'codex', 'claude-code': 'claude', pi: 'pi' }[agent] as AgentFamily
+}
+
+function legacyAgentForFamily(agentFamily: AgentFamily): AgentKind {
+  return { codex: 'codex-cli', claude: 'claude-code', pi: 'pi' }[agentFamily] as AgentKind
+}
+
+function familyForSurface(surface: PreciseExecutionSurface): AgentFamily {
+  if (surface.startsWith('claude-')) return 'claude'
+  if (surface.startsWith('codex-')) return 'codex'
+  return 'pi'
 }
 
 function nextReportedState(projection: EventProjection, current: BrowserSafeAssignment['reportedState']): BrowserSafeAssignment['reportedState'] {

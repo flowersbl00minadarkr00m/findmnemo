@@ -1,5 +1,11 @@
 import { createHash } from 'node:crypto'
-import { parseAssignmentEventV1, type AssignmentEventV1 } from '../../../shared/agent-activity-contract.js'
+import {
+  ASSIGNMENT_EVENT_SCHEMA_V2,
+  parseAssignmentEventV1,
+  parseAssignmentEventV2,
+  type AssignmentEvent,
+  type AssignmentEventV1,
+} from '../../../shared/agent-activity-contract.js'
 import type { SecretStore } from '../../auth/secret-store.js'
 import { ReporterSanitizer, type ReporterEventDraft } from './sanitizer.js'
 
@@ -14,7 +20,7 @@ interface RetrySpoolOptions {
   limits?: Partial<typeof DEFAULT_LIMITS>
 }
 
-interface StoredEvent { event: AssignmentEventV1; enqueuedAt: string; terminal: boolean }
+interface StoredEvent { event: AssignmentEvent; enqueuedAt: string; terminal: boolean }
 interface StoredSpool { version: 1; integrationId: string; events: StoredEvent[]; gapCount: number; lastGapAt: string | null; attempts: number }
 export interface RetryReceipt { outcome: string; reasonCode?: string }
 export interface RetryInspection { eventCount: number; terminalCount: number; gapCount: number; totalBytes: number; oldestAt: string | null }
@@ -43,8 +49,8 @@ export class RetrySpool {
     return events
   }
 
-  async enqueue(input: AssignmentEventV1): Promise<void> {
-    const event = parseAssignmentEventV1(input).event
+  async enqueue(input: AssignmentEvent): Promise<void> {
+    const event = parseStoredEvent(input)
     if (event.integrationId !== this.integrationId) throw new Error('RETRY_INTEGRATION_MISMATCH')
     const spool = await this.load()
     this.pruneExpired(spool)
@@ -66,7 +72,7 @@ export class RetrySpool {
     }
   }
 
-  async replay(send: (event: AssignmentEventV1) => Promise<RetryReceipt>, maxEvents = Number.POSITIVE_INFINITY): Promise<ReplayResult> {
+  async replay(send: (event: AssignmentEvent) => Promise<RetryReceipt>, maxEvents = Number.POSITIVE_INFINITY): Promise<ReplayResult> {
     const spool = await this.load()
     this.pruneExpired(spool)
     let removed = 0
@@ -98,7 +104,10 @@ export class RetrySpool {
     try {
       const parsed = JSON.parse(value) as StoredSpool
       if (parsed.version !== 1 || parsed.integrationId !== this.integrationId || !Array.isArray(parsed.events) || !Number.isSafeInteger(parsed.gapCount) || !Number.isSafeInteger(parsed.attempts)) throw new Error('invalid')
-      parsed.events = parsed.events.map((entry) => ({ event: parseAssignmentEventV1(entry.event).event, enqueuedAt: validTime(entry.enqueuedAt), terminal: terminal(entry.event) }))
+      parsed.events = parsed.events.map((entry) => {
+        const event = parseStoredEvent(entry.event)
+        return { event, enqueuedAt: validTime(entry.enqueuedAt), terminal: terminal(event) }
+      })
       return parsed
     } catch {
       await this.store.delete(this.key)
@@ -143,22 +152,28 @@ export class RetrySpool {
 
 export class ResilientActivityReporter {
   private readonly spool: RetrySpool
-  constructor(spool: RetrySpool) { this.spool = spool }
+  private readonly deliveryTimeoutMs: number
+  private readonly returnBudgetMs: number
+  constructor(spool: RetrySpool, options: { deliveryTimeoutMs?: number; returnBudgetMs?: number } = {}) {
+    this.spool = spool
+    this.deliveryTimeoutMs = options.deliveryTimeoutMs ?? 150
+    this.returnBudgetMs = options.returnBudgetMs ?? 245
+  }
 
-  async submit(event: AssignmentEventV1, send: (event: AssignmentEventV1, signal: AbortSignal) => Promise<RetryReceipt>): Promise<{ delivered: boolean; queued: boolean; outcome: string; receipt?: RetryReceipt }> {
+  async submit<T extends AssignmentEvent>(event: T, send: (event: T, signal: AbortSignal) => Promise<RetryReceipt>): Promise<{ delivered: boolean; queued: boolean; outcome: string; receipt?: RetryReceipt }> {
     const started = Date.now()
     const controller = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
       const receipt = await Promise.race([
         send(event, controller.signal),
-        new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error('ACTIVITY_REPORT_TIMEOUT')) }, 150) }),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error('ACTIVITY_REPORT_TIMEOUT')) }, this.deliveryTimeoutMs) }),
       ])
       if (receipt.outcome === 'applied' || receipt.outcome === 'duplicate') return { delivered: true, queued: false, outcome: receipt.outcome, receipt }
     } catch { /* queue the already-sanitized event */ }
     finally { if (timer) clearTimeout(timer) }
     const queue = this.spool.enqueue(event).catch(() => undefined)
-    const remaining = Math.max(1, 245 - (Date.now() - started))
+    const remaining = Math.max(1, this.returnBudgetMs - (Date.now() - started))
     await Promise.race([queue, new Promise<void>((resolve) => setTimeout(resolve, remaining))])
     return { delivered: false, queued: true, outcome: 'queued' }
   }
@@ -170,7 +185,10 @@ export function retrySpoolSecretRef(integrationId: string): string {
 }
 
 function empty(integrationId: string): StoredSpool { return { version: 1, integrationId, events: [], gapCount: 0, lastGapAt: null, attempts: 0 } }
-function terminal(event: AssignmentEventV1): boolean { return event.observation.kind === 'completed' || event.observation.kind === 'failed' || event.observation.kind === 'cancelled' }
+function terminal(event: AssignmentEvent): boolean { return event.observation.kind === 'completed' || event.observation.kind === 'failed' || event.observation.kind === 'cancelled' }
+function parseStoredEvent(input: AssignmentEvent): AssignmentEvent {
+  return input.schema === ASSIGNMENT_EVENT_SCHEMA_V2 ? parseAssignmentEventV2(input).event : parseAssignmentEventV1(input).event
+}
 function validTime(value: string): string { if (!Number.isFinite(Date.parse(value))) throw new Error('invalid'); return value }
 function backoff(attempt: number): number { return BACKOFF_MS[Math.min(BACKOFF_MS.length - 1, Math.max(0, attempt - 1))] }
 function jitter(value: number, random: number): number { return Math.round(value * (0.9 + Math.min(1, Math.max(0, random)) * 0.2)) }

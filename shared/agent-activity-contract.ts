@@ -1,7 +1,14 @@
 export const ASSIGNMENT_EVENT_SCHEMA_V1 = 'findmnemo.assignment-event.v1' as const
+export const ASSIGNMENT_EVENT_SCHEMA_V2 = 'findmnemo.assignment-event.v2' as const
 export const ASSIGNMENT_EVENT_MAX_BYTES = 16 * 1024
 
 export const AGENT_KINDS = ['codex-cli', 'claude-code', 'pi'] as const
+export const AGENT_FAMILIES = ['claude', 'codex', 'pi'] as const
+export const PRECISE_EXECUTION_SURFACES = [
+  'claude-desktop-code', 'claude-desktop-home', 'claude-code-cli',
+  'codex-desktop', 'codex-cli', 'pi-cli',
+] as const
+export const EXECUTION_SURFACES = [...PRECISE_EXECUTION_SURFACES, 'legacy-ambiguous'] as const
 export const ASSIGNMENT_EVENT_KINDS = [
   'accepted', 'started', 'heartbeat', 'waiting', 'blocked', 'needs-action',
   'resumed', 'completed', 'failed', 'cancelled', 'snapshot',
@@ -16,6 +23,9 @@ export const TERMINAL_OUTCOMES = ['completed', 'failed', 'cancelled'] as const
 export const SUMMARY_SOURCES = ['explicit-user', 'explicit-agent-tool', 'claude-task-subject', 'placeholder'] as const
 
 export type AgentKind = (typeof AGENT_KINDS)[number]
+export type AgentFamily = (typeof AGENT_FAMILIES)[number]
+export type ExecutionSurface = (typeof EXECUTION_SURFACES)[number]
+export type PreciseExecutionSurface = Exclude<ExecutionSurface, 'legacy-ambiguous'>
 export type AssignmentEventKind = (typeof ASSIGNMENT_EVENT_KINDS)[number]
 export type AssignmentReportedState = (typeof ASSIGNMENT_REPORTED_STATES)[number]
 export type AssignmentEvidenceKind = (typeof ASSIGNMENT_EVIDENCE_KINDS)[number]
@@ -60,7 +70,45 @@ export interface AssignmentEventV1 {
   }
 }
 
-export type AssignmentEventReceiptCode = 'SUMMARY_MINIMIZED'
+export interface AssignmentEventV2 {
+  schema: typeof ASSIGNMENT_EVENT_SCHEMA_V2
+  eventId: string
+  integrationId: string
+  agentFamily: AgentFamily
+  executionSurface: PreciseExecutionSurface
+  adapterVersion: string
+  agentVersion: string | null
+  assignment: AssignmentEventV1['assignment']
+  observation: AssignmentEventV1['observation']
+  model?: {
+    label: string
+    source: 'host-reported'
+    confidence: 'reported'
+  } | null
+  snapshot?: AssignmentEventV1['snapshot']
+}
+
+export interface NormalizedAssignmentEvent {
+  schema: typeof ASSIGNMENT_EVENT_SCHEMA_V1 | typeof ASSIGNMENT_EVENT_SCHEMA_V2
+  schemaVersion: 'v1' | 'v2'
+  identityVersion: 'v1' | 'v2'
+  eventId: string
+  integrationId: string
+  agent: AgentKind
+  agentFamily: AgentFamily
+  executionSurface: ExecutionSurface
+  adapterVersion: string
+  agentVersion: string | null
+  assignment: AssignmentEventV1['assignment']
+  observation: AssignmentEventV1['observation']
+  modelLabel: string | null
+  modelSource: 'host-reported' | null
+  modelConfidence: 'reported' | null
+  snapshot?: AssignmentEventV1['snapshot']
+}
+
+export type AssignmentEvent = AssignmentEventV1 | AssignmentEventV2
+export type AssignmentEventReceiptCode = 'SUMMARY_MINIMIZED' | 'MODEL_LABEL_IGNORED'
 
 export class AssignmentEventValidationError extends Error {
   readonly code: string
@@ -73,15 +121,18 @@ export class AssignmentEventValidationError extends Error {
 }
 
 const ROOT_KEYS = ['schema', 'eventId', 'integrationId', 'agent', 'adapterVersion', 'agentVersion', 'assignment', 'observation', 'modelLabel', 'snapshot'] as const
+const ROOT_KEYS_V2 = ['schema', 'eventId', 'integrationId', 'agentFamily', 'executionSurface', 'adapterVersion', 'agentVersion', 'assignment', 'observation', 'model', 'snapshot'] as const
 const ASSIGNMENT_KEYS = ['originAssignmentId', 'generation', 'summary', 'projectRef', 'targetRef'] as const
 const SUMMARY_KEYS = ['text', 'source'] as const
 const OBSERVATION_KEYS = ['sequence', 'kind', 'reportedState', 'observedAt', 'reasonCode', 'evidenceKind', 'originEvidenceId', 'terminalEvidence'] as const
 const TERMINAL_KEYS = ['kind', 'outcome'] as const
 const SNAPSHOT_KEYS = ['requestId', 'mode', 'coverageStartedAt'] as const
+const MODEL_KEYS = ['label', 'source', 'confidence'] as const
 const PROHIBITED_KEY = /(prompt|response|message|transcript|reasoning|thought|credential|authorization|cookie|environment|command.?history|raw|log|body|content|diff|file.?data|(?:access|refresh|auth|secret)?token)/i
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const RFC3339_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/
 const SECRET_LIKE = /(?:bearer\s+[a-z0-9._~+/-]{12,}|(?:password|passwd|secret|api[_ -]?key)\s*[:=]|\bsk-[a-z0-9_-]{12,})/i
+const SAFE_MODEL_LABEL = /^[\p{L}\p{N}][\p{L}\p{N} ._:/+()-]*$/u
 
 type JsonObject = Record<string, unknown>
 
@@ -140,6 +191,133 @@ export function parseAssignmentEventV1(input: unknown): { event: AssignmentEvent
     ...(snapshot ? { snapshot } : {}),
   }
   return { event, receiptCodes: minimized ? ['SUMMARY_MINIMIZED'] : [] }
+}
+
+export function parseAssignmentEventV2(input: unknown): { event: AssignmentEventV2; receiptCodes: AssignmentEventReceiptCode[] } {
+  assertBoundedShape(input)
+  const root = exactObject(input, ROOT_KEYS_V2, '$')
+  if (root.schema !== ASSIGNMENT_EVENT_SCHEMA_V2) fail('UNSUPPORTED_SCHEMA')
+
+  const assignment = exactObject(root.assignment, ASSIGNMENT_KEYS, '$.assignment')
+  const summary = exactObject(assignment.summary, SUMMARY_KEYS, '$.assignment.summary')
+  const projectRef = parseProjectRef(assignment.projectRef)
+  const targetRef = assignment.targetRef === undefined ? undefined : parseTargetRef(assignment.targetRef)
+  const observation = exactObject(root.observation, OBSERVATION_KEYS, '$.observation')
+  const terminalEvidence = observation.terminalEvidence === undefined
+    ? undefined
+    : parseTerminalEvidence(observation.terminalEvidence)
+  const model = root.model === undefined || root.model === null
+    ? null
+    : exactObject(root.model, MODEL_KEYS, '$.model')
+
+  const agentFamily = enumValue(root.agentFamily, AGENT_FAMILIES, 'INVALID_AGENT_FAMILY')
+  const executionSurface = enumValue(root.executionSurface, PRECISE_EXECUTION_SURFACES, 'INVALID_EXECUTION_SURFACE')
+  if (familyForSurface(executionSurface) !== agentFamily) fail('INVALID_FAMILY_SURFACE')
+  const summaryText = boundedString(summary.text, 160, 'INVALID_SUMMARY')
+  if (summaryText.trim().length === 0) fail('INVALID_SUMMARY')
+  const summarySource = enumValue(summary.source, SUMMARY_SOURCES, 'INVALID_SUMMARY_SOURCE')
+  const minimized = shouldMinimizeSummary(summaryText)
+  const kind = enumValue(observation.kind, ASSIGNMENT_EVENT_KINDS, 'INVALID_EVENT_KIND')
+  assertTerminalEvidence(kind, terminalEvidence)
+
+  const snapshot = root.snapshot === undefined ? undefined : parseSnapshot(root.snapshot)
+  if ((kind === 'snapshot') !== Boolean(snapshot)) fail('INVALID_SNAPSHOT')
+
+  let acceptedModel: AssignmentEventV2['model'] = null
+  let modelIgnored = false
+  if (model) {
+    const source = enumValue(model.source, ['host-reported'] as const, 'INVALID_MODEL_SOURCE')
+    const confidence = enumValue(model.confidence, ['reported'] as const, 'INVALID_MODEL_CONFIDENCE')
+    const label = optionalSafeModelLabel(model.label)
+    if (label === null) modelIgnored = true
+    else acceptedModel = { label, source, confidence }
+  }
+
+  const event: AssignmentEventV2 = {
+    schema: ASSIGNMENT_EVENT_SCHEMA_V2,
+    eventId: uuidString(root.eventId, 64, 'INVALID_EVENT_ID'),
+    integrationId: opaqueReference(root.integrationId, 64, 'INVALID_INTEGRATION_ID'),
+    agentFamily,
+    executionSurface,
+    adapterVersion: opaqueString(root.adapterVersion, 32, 'INVALID_ADAPTER_VERSION'),
+    agentVersion: nullableBoundedString(root.agentVersion, 48, 'INVALID_AGENT_VERSION'),
+    assignment: {
+      originAssignmentId: opaqueString(assignment.originAssignmentId, 160, 'INVALID_ASSIGNMENT_ID'),
+      generation: positiveInteger(assignment.generation, 'INVALID_GENERATION'),
+      summary: minimized
+        ? { text: placeholderSummaryForFamily(agentFamily), source: 'placeholder' }
+        : { text: summaryText.trim(), source: summarySource },
+      projectRef,
+      ...(targetRef ? { targetRef } : {}),
+    },
+    observation: {
+      sequence: positiveInteger(observation.sequence, 'INVALID_SEQUENCE'),
+      kind,
+      ...(observation.reportedState === undefined ? {} : { reportedState: enumValue(observation.reportedState, ASSIGNMENT_REPORTED_STATES, 'INVALID_REPORTED_STATE') }),
+      observedAt: timestamp(observation.observedAt, 'INVALID_OBSERVED_AT'),
+      ...(observation.reasonCode === undefined ? {} : { reasonCode: enumValue(observation.reasonCode, ['permission', 'input-required', 'agent-api-error', 'explicit-wait', 'explicit-block', 'reporter-recovery'] as const, 'INVALID_REASON_CODE') }),
+      evidenceKind: enumValue(observation.evidenceKind, ASSIGNMENT_EVIDENCE_KINDS, 'INVALID_EVIDENCE_KIND'),
+      ...(observation.originEvidenceId === undefined ? {} : { originEvidenceId: opaqueString(observation.originEvidenceId, 160, 'INVALID_EVIDENCE_ID') }),
+      ...(terminalEvidence ? { terminalEvidence } : {}),
+    },
+    ...(root.model === undefined ? {} : { model: acceptedModel }),
+    ...(snapshot ? { snapshot } : {}),
+  }
+  return {
+    event,
+    receiptCodes: [
+      ...(minimized ? ['SUMMARY_MINIMIZED' as const] : []),
+      ...(modelIgnored ? ['MODEL_LABEL_IGNORED' as const] : []),
+    ],
+  }
+}
+
+export function parseAssignmentEvent(input: unknown): { event: NormalizedAssignmentEvent; receiptCodes: AssignmentEventReceiptCode[] } {
+  assertBoundedShape(input)
+  if (!input || typeof input !== 'object' || Array.isArray(input)) fail('INVALID_OBJECT')
+  const schema = (input as JsonObject).schema
+  if (schema === ASSIGNMENT_EVENT_SCHEMA_V1) {
+    const parsed = parseAssignmentEventV1(input)
+    return { event: normalizeAssignmentEvent(parsed.event), receiptCodes: parsed.receiptCodes }
+  }
+  if (schema === ASSIGNMENT_EVENT_SCHEMA_V2) {
+    const parsed = parseAssignmentEventV2(input)
+    return { event: normalizeAssignmentEvent(parsed.event), receiptCodes: parsed.receiptCodes }
+  }
+  fail('UNSUPPORTED_SCHEMA')
+}
+
+export function normalizeAssignmentEvent(event: AssignmentEvent): NormalizedAssignmentEvent {
+  if (event.schema === ASSIGNMENT_EVENT_SCHEMA_V1) {
+    return {
+      ...event,
+      schemaVersion: 'v1',
+      identityVersion: 'v1',
+      agentFamily: familyForLegacyAgent(event.agent),
+      executionSurface: 'legacy-ambiguous',
+      modelLabel: event.modelLabel ?? null,
+      modelSource: null,
+      modelConfidence: null,
+    }
+  }
+  return {
+    schema: event.schema,
+    schemaVersion: 'v2',
+    identityVersion: 'v2',
+    eventId: event.eventId,
+    integrationId: event.integrationId,
+    agent: legacyAgentForFamily(event.agentFamily),
+    agentFamily: event.agentFamily,
+    executionSurface: event.executionSurface,
+    adapterVersion: event.adapterVersion,
+    agentVersion: event.agentVersion,
+    assignment: event.assignment,
+    observation: event.observation,
+    modelLabel: event.model?.label ?? null,
+    modelSource: event.model?.source ?? null,
+    modelConfidence: event.model?.confidence ?? null,
+    ...(event.snapshot ? { snapshot: event.snapshot } : {}),
+  }
 }
 
 function assertBoundedShape(input: unknown): void {
@@ -269,6 +447,14 @@ function nullableSafeLabel(value: unknown, maximum: number, code: string): strin
   return text
 }
 
+function optionalSafeModelLabel(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const text = value.trim()
+  if (text.length === 0 || [...text].length > 80) return null
+  if (hasControlCharacter(text) || SECRET_LIKE.test(text) || !SAFE_MODEL_LABEL.test(text)) return null
+  return text
+}
+
 function positiveInteger(value: unknown, code: string): number {
   if (!Number.isSafeInteger(value) || Number(value) < 1) fail(code)
   return Number(value)
@@ -293,6 +479,24 @@ function hasControlCharacter(value: string): boolean {
 
 function placeholderSummary(agent: AgentKind): string {
   return `${{ 'codex-cli': 'Codex', 'claude-code': 'Claude Code', pi: 'Pi' }[agent]} work — name this assignment`
+}
+
+function placeholderSummaryForFamily(agentFamily: AgentFamily): string {
+  return `${{ codex: 'Codex', claude: 'Claude', pi: 'Pi' }[agentFamily]} work — name this assignment`
+}
+
+function familyForLegacyAgent(agent: AgentKind): AgentFamily {
+  return { 'codex-cli': 'codex', 'claude-code': 'claude', pi: 'pi' }[agent] as AgentFamily
+}
+
+function legacyAgentForFamily(agentFamily: AgentFamily): AgentKind {
+  return { codex: 'codex-cli', claude: 'claude-code', pi: 'pi' }[agentFamily] as AgentKind
+}
+
+function familyForSurface(surface: PreciseExecutionSurface): AgentFamily {
+  if (surface.startsWith('claude-')) return 'claude'
+  if (surface.startsWith('codex-')) return 'codex'
+  return 'pi'
 }
 
 function fail(code: string): never { throw new AssignmentEventValidationError(code) }

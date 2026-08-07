@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { AttentionWorkspaceProjection } from './types'
+import type { AgentActivityIntegrationDto } from '../shared/companion-contract'
 import { DailyBrief } from './components/DailyBrief'
 
 const projection: AttentionWorkspaceProjection = {
@@ -38,5 +39,20 @@ describe('Daily Brief', () => {
     render(<DailyBrief projection={{ items: [], sources: [], dayStatus: { queued: 0, resolved: 0, progress: null, label: 'No decisions queued' } }} onSelectedIdChange={() => undefined} onAction={async () => undefined} onHomeViewChange={() => undefined} />)
     expect(screen.getByText('No decisions queued')).toBeVisible()
     expect(screen.queryByText('100%')).not.toBeInTheDocument()
+  })
+
+  it('surfaces disconnected agent tracking in the decision view', () => {
+    const integration: AgentActivityIntegrationDto = {
+      id: 'auto:codex-cli', agent: 'codex-cli', label: 'Codex', installedVersion: '0.144.3', supported: true,
+      configured: false, enabled: false, agentAuthState: 'authenticated', integrationAuthState: 'not-configured', trustState: 'not-applicable', statusCheckedAt: '2026-07-19T20:00:00.000Z',
+      supportLevel: 'automatic-partial', coverageState: 'unavailable', coverageExplanation: 'Enable tracking to begin.', capabilities: { detection: true, manual: true, snapshot: 'next-interaction', automaticEvents: 'partial', automaticTerminal: 'none' },
+      freshnessProfile: 'hook-observed', freshnessWindowSeconds: 900, lastEventAt: null, lastSuccessAt: null, retainedLastSuccess: false, pendingEventCount: 0, gapCount: 0, failureCode: null, primaryAction: 'enable',
+    }
+    const onOpenPrivacy = vi.fn()
+    render(<DailyBrief projection={{ items: [], sources: [], dayStatus: { queued: 0, resolved: 0, progress: null, label: 'No decisions queued' } }} onSelectedIdChange={() => undefined} onAction={async () => undefined} onHomeViewChange={() => undefined} agentIntegrations={[integration]} agentAssignmentCount={0} onOpenPrivacy={onOpenPrivacy} />)
+
+    expect(screen.getByRole('heading', { name: 'Automatic agent tracking is off' })).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Set up agent tracking' }))
+    expect(onOpenPrivacy).toHaveBeenCalledOnce()
   })
 })

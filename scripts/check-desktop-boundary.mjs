@@ -1,7 +1,17 @@
 import { readFile } from 'node:fs/promises'
+import { verifyCheckedInWindowsIcon } from './windows-icon.mjs'
 
-const [main, preload, html, builder, contract, packageDocument, notices, tokscaleResolver, activityInstaller, activitySanitizer, activityLauncher, activityReporterCommand, uninstall] = await Promise.all([
+const [iconEvidence, main, processMode, mcpCommand, mcpServer, mcpPackageVerifier, packageReceipt, peIcon, windowsIcon, iconManifest, preload, html, builder, contract, packageDocument, notices, tokscaleResolver, activityInstaller, activitySanitizer, activityLauncher, activityReporterCommand, uninstall] = await Promise.all([
+  verifyCheckedInWindowsIcon(),
   readFile(new URL('../desktop/main.ts', import.meta.url), 'utf8'),
+  readFile(new URL('../desktop/process-mode.ts', import.meta.url), 'utf8'),
+  readFile(new URL('../desktop/agent-activity/mcp-command.ts', import.meta.url), 'utf8'),
+  readFile(new URL('../server/mcp/findmnemo-mcp.ts', import.meta.url), 'utf8'),
+  readFile(new URL('./verify-mcp-package-windows.mjs', import.meta.url), 'utf8'),
+  readFile(new URL('./desktop-package-receipt.mjs', import.meta.url), 'utf8'),
+  readFile(new URL('./pe-icon.mjs', import.meta.url), 'utf8'),
+  readFile(new URL('./windows-icon.mjs', import.meta.url), 'utf8'),
+  readFile(new URL('../build/icon.manifest.json', import.meta.url), 'utf8'),
   readFile(new URL('../desktop/preload.cts', import.meta.url), 'utf8'),
   readFile(new URL('../desktop.html', import.meta.url), 'utf8'),
   readFile(new URL('../electron-builder.yml', import.meta.url), 'utf8'),
@@ -22,6 +32,18 @@ const LIFECYCLE_CHANNELS = [...contract.matchAll(/'findmnemo:lifecycle:[^']+'/g)
 
 const checks = [
   [main.includes('requestSingleInstanceLock'), 'desktop must enforce a single application owner'],
+  [main.indexOf('selectDesktopProcessMode') < main.indexOf('requestSingleInstanceLock') && main.indexOf("processMode.kind === 'mcp-server'") < main.indexOf('requestSingleInstanceLock'), 'MCP process mode must be selected before GUI singleton acquisition'],
+  [main.indexOf('requestSingleInstanceLock') < main.indexOf('registerSchemesAsPrivileged'), 'privileged renderer registration must remain inside GUI mode'],
+  [processMode.includes("'MCP_LAUNCH_BINDING_REQUIRED'") && processMode.includes("'MCP_LAUNCH_BINDING_INVALID'") && processMode.includes('PROCESS_MODE_CONFLICT'), 'desktop process selection must fail closed on missing, duplicate, or mixed MCP bindings'],
+  [mcpCommand.includes("'--mcp-server'") && mcpCommand.includes('verifiedExecutablePath') && !/(?:node\.exe|\bnpm\b|\bnpx\b|\bpnpm\b|\byarn\b|\bbun\b)/i.test(mcpCommand), 'installed MCP commands must use only the verified companion executable and fixed flags'],
+  [mcpServer.includes('export async function runMcpProcess') && mcpServer.includes('createPlatformSecretStore') && mcpServer.includes('for await (const line of lines)') && mcpServer.includes('if (response) io.writeStdout'), 'MCP mode must reuse the existing injected STDIO runner and platform secret store'],
+  [builder.includes('- dist-desktop/**/*') && packageJson.scripts?.['verify:mcp-package-windows'] === 'node scripts/verify-mcp-package-windows.mjs', 'the ASAR inputs and Windows MCP package verifier must be wired into the package contract'],
+  [mcpPackageVerifier.includes("resolve('release-desktop')") && mcpPackageVerifier.includes("resolve(releaseRoot, 'win-unpacked')") && mcpPackageVerifier.includes('listPackage(archive)') && mcpPackageVerifier.includes("['gui-first', 'mcp-first']"), 'MCP package verification must inspect the final ASAR and exercise both executable start orders'],
+  [builder.includes('  icon: build/icon.ico') && !builder.includes('icon: build/icon.svg'), 'Windows packaging must bind the validated ICO explicitly without an SVG fallback'],
+  [iconEvidence.sourceSha256 === JSON.parse(iconManifest).sourceSha256 && iconEvidence.sizes.join(',') === '16,32,48,256', 'the retained SVG source and checked-in multi-resolution ICO must match audited provenance'],
+  [packageJson.devDependencies?.['@resvg/resvg-js'] === '2.6.2' && packageJson.devDependencies?.resedit === '1.7.2' && windowsIcon.includes("PINNED_RESVG_VERSION = '2.6.2'") && peIcon.includes("PINNED_RESEDIT_VERSION = '1.7.2'"), 'icon generation and PE inspection tools must remain exactly pinned'],
+  [packageJson.scripts?.['package:desktop:dir']?.startsWith('node scripts/desktop-package-run.mjs prepare &&') && packageJson.scripts?.['package:desktop:dir']?.endsWith('&& node scripts/desktop-package-run.mjs complete') && packageReceipt.includes('consumeDesktopPackageReceipt'), 'directory packaging must invalidate stale output before work and emit a success-only consumable receipt'],
+  [mcpPackageVerifier.includes('consumeDesktopPackageReceipt') && mcpPackageVerifier.includes('assertPeIconMatchesIco'), 'the final verifier must consume current-run evidence and compare the executable PE icon group to the checked-in ICO'],
   [main.includes("nodeIntegration: false"), 'renderer must not have Node integration'],
   [main.includes('contextIsolation: true'), 'renderer must use context isolation'],
   [main.includes('sandbox: true'), 'renderer must use sandboxing'],

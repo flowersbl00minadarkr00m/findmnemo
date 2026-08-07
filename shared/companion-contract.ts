@@ -1,3 +1,5 @@
+import type { AgentFamily, ExecutionSurface, PreciseExecutionSurface } from './agent-activity-contract.js'
+
 export const COMPANION_PROTOCOL_VERSION = '1.0.0' as const
 
 export const COMPANION_CONNECTION_STATES = [
@@ -53,6 +55,10 @@ export const COMPANION_REASON_CODES = [
 
 export const COMPANION_ERROR_CODES = [
   'INVALID_REQUEST',
+  'ACTIVITY_REQUEST_INVALID',
+  'ACTIVITY_ACTION_FAILED',
+  'ACTIVITY_NOT_FOUND',
+  'LOCAL_CONFIRMATION_REQUIRED',
   'UNSUPPORTED_PROTOCOL_VERSION',
   'ORIGIN_NOT_ALLOWED',
   'PAIRING_REQUIRED',
@@ -198,13 +204,23 @@ export interface AgentActivityCapabilityDto {
   snapshot: 'none' | 'next-interaction' | 'current-session'
   automaticEvents: 'none' | 'partial'
   automaticTerminal: 'none' | 'task-only'
+  explicitTerminal?: 'none' | 'explicit' | 'task-only'
 }
 
 export interface AgentActivityIntegrationDto {
   id: string
   agent: AgentActivityAgentId
   label: string
+  agentFamily?: AgentFamily
+  executionSurface?: PreciseExecutionSurface
+  surfaceLabel?: string
   installedVersion: string | null
+  detectedVersion?: string | null
+  qualifiedVersions?: string[]
+  setupMechanism?: string
+  setupState?: 'unavailable' | 'not-configured' | 'configured' | 'verified'
+  reachability?: 'unknown' | 'unavailable' | 'reachable'
+  healthState?: 'unknown' | 'unavailable' | 'healthy' | 'stale'
   supported: boolean
   configured: boolean
   enabled: boolean
@@ -220,6 +236,7 @@ export interface AgentActivityIntegrationDto {
   freshnessWindowSeconds: number
   lastEventAt: string | null
   lastSuccessAt: string | null
+  lastQualifiedAt?: string | null
   retainedLastSuccess: boolean
   pendingEventCount: number
   gapCount: number
@@ -233,11 +250,16 @@ export interface AgentActivityAssignmentSummaryDto {
   ticketId: string
   agent: AgentActivityAgentId
   agentLabel: string
+  agentFamily?: AgentFamily
+  executionSurface?: ExecutionSurface
+  surfaceLabel?: string
   summary: string
   summaryOwner: 'source' | 'human'
   project: { kind: 'approved-project'; id: string; label: string } | { kind: 'unassigned' } | { kind: 'needs-review'; reviewId: string }
   projectOwner: 'source' | 'human'
   modelLabel: string | null
+  modelSource?: 'host-reported' | null
+  modelConfidence?: 'reported' | null
   effectiveState: 'active' | 'waiting' | 'blocked' | 'needs-action' | 'completed' | 'failed' | 'cancelled' | 'stale'
   retainedLastState: 'active' | 'waiting' | 'blocked' | 'needs-action' | 'completed' | 'failed' | 'cancelled'
   lastObservedAt: string
@@ -1182,16 +1204,207 @@ export function assertUsageBoundarySafe(input: unknown): void {
 export function assertAgentActivityBrowserSafe(input: unknown): void {
   const serialized = JSON.stringify(input)
   if (serialized.length > 512 * 1024) throw new Error('AGENT_ACTIVITY_DTO_TOO_LARGE')
-  const forbidden = /(?:canonicalPath|rawPath|transcript|originAssignmentId|originEvidenceId|hookPayload|retryContent|activityToken|secretRef|credential|fileContent)/i
+  const forbidden = /(?:canonicalPath|rawPath|transcript|originAssignmentId|originEvidenceId|hookPayload|retryContent|activityToken|secretRef|credentialRef|fileContent)/i
   const visit = (value: unknown): void => {
     if (!value || typeof value !== 'object') return
     if (Array.isArray(value)) { for (const item of value) visit(item); return }
     for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-      if (forbidden.test(key)) throw new Error('AGENT_ACTIVITY_PRIVATE_FIELD')
+      if (forbidden.test(key) || ['path', 'command', 'config', 'credential'].includes(key.toLowerCase())) throw new Error('AGENT_ACTIVITY_PRIVATE_FIELD')
       visit(child)
     }
   }
   visit(input)
+}
+
+const AGENT_ACTIVITY_INTEGRATION_DTO_KEYS = [
+  'id', 'agent', 'label', 'agentFamily', 'executionSurface', 'surfaceLabel',
+  'installedVersion', 'detectedVersion', 'qualifiedVersions', 'setupMechanism', 'setupState', 'reachability', 'healthState',
+  'supported', 'configured', 'enabled', 'agentAuthState', 'integrationAuthState', 'trustState', 'statusCheckedAt',
+  'supportLevel', 'coverageState', 'coverageExplanation', 'capabilities', 'freshnessProfile', 'freshnessWindowSeconds',
+  'lastEventAt', 'lastSuccessAt', 'lastQualifiedAt', 'retainedLastSuccess', 'pendingEventCount', 'gapCount',
+  'failureCode', 'primaryAction',
+] as const
+
+const AGENT_ACTIVITY_ASSIGNMENT_DTO_KEYS = [
+  'id', 'integrationId', 'ticketId', 'agent', 'agentLabel', 'agentFamily', 'executionSurface', 'surfaceLabel',
+  'summary', 'summaryOwner', 'project', 'projectOwner', 'modelLabel', 'modelSource', 'modelConfidence',
+  'effectiveState', 'retainedLastState', 'lastObservedAt', 'freshUntil', 'terminalAt', 'terminalEvidence',
+  'terminalOutcome', 'evidenceKind', 'sourceUpdatePolicy', 'recordVersion', 'linkedTicketKind',
+] as const
+
+export function assertAgentActivityIntegrationDto(input: unknown): asserts input is AgentActivityIntegrationDto {
+  assertAgentActivityBrowserSafe(input)
+  if (!hasExactKeys(input, AGENT_ACTIVITY_INTEGRATION_DTO_KEYS)) throw new Error('INVALID_AGENT_ACTIVITY_INTEGRATION_DTO')
+  const value = input as Record<string, unknown>
+  const family = value.agentFamily
+  const surface = value.executionSurface
+  const capabilityKeys = ['detection', 'manual', 'snapshot', 'automaticEvents', 'automaticTerminal', 'explicitTerminal'] as const
+  const capabilities = value.capabilities as Record<string, unknown>
+  if (
+    typeof value.id !== 'string' ||
+    !isAgentFamily(family) ||
+    !isPreciseSurface(surface) ||
+    familyForSurface(surface) !== family ||
+    value.id !== integrationIdForSurface(surface) ||
+    value.surfaceLabel !== surfaceLabel(surface) ||
+    value.agent !== legacyAgentForFamily(family) ||
+    value.label !== familyLabel(family) ||
+    !nullableSafeString(value.installedVersion, 32) ||
+    !nullableSafeString(value.detectedVersion, 32) ||
+    !Array.isArray(value.qualifiedVersions) ||
+    !value.qualifiedVersions.every((version) => typeof version === 'string' && version.length <= 32) ||
+    typeof value.setupMechanism !== 'string' ||
+    !['unavailable', 'not-configured', 'configured', 'verified'].includes(String(value.setupState)) ||
+    !['unknown', 'unavailable', 'reachable'].includes(String(value.reachability)) ||
+    !['unknown', 'unavailable', 'healthy', 'stale'].includes(String(value.healthState)) ||
+    !hasExactKeys(value.capabilities, capabilityKeys) ||
+    typeof capabilities.detection !== 'boolean' ||
+    typeof capabilities.manual !== 'boolean' ||
+    !['none', 'next-interaction', 'current-session'].includes(String(capabilities.snapshot)) ||
+    !['none', 'partial'].includes(String(capabilities.automaticEvents)) ||
+    !['none', 'task-only'].includes(String(capabilities.automaticTerminal)) ||
+    !['none', 'explicit', 'task-only'].includes(String(capabilities.explicitTerminal)) ||
+    typeof value.supported !== 'boolean' ||
+    typeof value.configured !== 'boolean' ||
+    typeof value.enabled !== 'boolean' ||
+    !['authenticated', 'signed-out', 'unknown', 'unavailable', 'not-applicable'].includes(String(value.agentAuthState)) ||
+    !['ready', 'missing', 'unavailable', 'not-configured'].includes(String(value.integrationAuthState)) ||
+    !['trusted', 'untrusted', 'unknown', 'unavailable', 'not-applicable'].includes(String(value.trustState)) ||
+    !nullableTimestamp(value.statusCheckedAt) ||
+    !['unsupported', 'detection-only', 'manual', 'snapshot', 'automatic-partial', 'automatic-task-terminal'].includes(String(value.supportLevel)) ||
+    !AGENT_ACTIVITY_COVERAGE_STATES.includes(value.coverageState as AgentActivityCoverageState) ||
+    typeof value.coverageExplanation !== 'string' ||
+    typeof value.freshnessProfile !== 'string' ||
+    !Number.isSafeInteger(value.freshnessWindowSeconds) ||
+    Number(value.freshnessWindowSeconds) < 1 ||
+    !nullableTimestamp(value.lastEventAt) ||
+    !nullableTimestamp(value.lastSuccessAt) ||
+    !nullableTimestamp(value.lastQualifiedAt) ||
+    typeof value.retainedLastSuccess !== 'boolean' ||
+    !boundedDtoCount(value.pendingEventCount) ||
+    !boundedDtoCount(value.gapCount) ||
+    !nullableSafeCode(value.failureCode) ||
+    !['enable', 'test', 'reconnect', 'resume', 'review-gap', 'manual-report', 'sign-in', 'check-status'].includes(String(value.primaryAction))
+  ) throw new Error('INVALID_AGENT_ACTIVITY_INTEGRATION_DTO')
+}
+
+export function assertAgentActivityAssignmentSummaryDto(input: unknown): asserts input is AgentActivityAssignmentSummaryDto {
+  assertAgentActivityBrowserSafe(input)
+  if (!hasExactKeys(input, AGENT_ACTIVITY_ASSIGNMENT_DTO_KEYS)) throw new Error('INVALID_AGENT_ACTIVITY_ASSIGNMENT_DTO')
+  const value = input as Record<string, unknown>
+  const family = value.agentFamily
+  const surface = value.executionSurface
+  const project = value.project
+  if (
+    !isAgentFamily(family) ||
+    !isExecutionSurface(surface) ||
+    value.agent !== legacyAgentForFamily(family) ||
+    value.agentLabel !== familyLabel(family) ||
+    value.surfaceLabel !== surfaceLabel(surface) ||
+    (surface !== 'legacy-ambiguous' && familyForSurface(surface) !== family) ||
+    (surface !== 'legacy-ambiguous' && value.integrationId !== integrationIdForSurface(surface)) ||
+    typeof value.id !== 'string' ||
+    typeof value.integrationId !== 'string' ||
+    typeof value.ticketId !== 'string' ||
+    typeof value.summary !== 'string' ||
+    !['source', 'human'].includes(String(value.summaryOwner)) ||
+    !validAssignmentProject(project) ||
+    !['source', 'human'].includes(String(value.projectOwner)) ||
+    !nullableSafeString(value.modelLabel, 80) ||
+    ![null, 'host-reported'].includes(value.modelSource as null | string) ||
+    ![null, 'reported'].includes(value.modelConfidence as null | string) ||
+    !['active', 'waiting', 'blocked', 'needs-action', 'completed', 'failed', 'cancelled', 'stale'].includes(String(value.effectiveState)) ||
+    !['active', 'waiting', 'blocked', 'needs-action', 'completed', 'failed', 'cancelled'].includes(String(value.retainedLastState)) ||
+    !nullableTimestamp(value.lastObservedAt) ||
+    !nullableTimestamp(value.freshUntil) ||
+    !nullableTimestamp(value.terminalAt) ||
+    !(value.terminalEvidence === null || typeof value.terminalEvidence === 'string') ||
+    ![null, 'completed', 'failed', 'cancelled'].includes(value.terminalOutcome as null | string) ||
+    typeof value.evidenceKind !== 'string' ||
+    !['follow', 'paused', 'detached', 'closed'].includes(String(value.sourceUpdatePolicy)) ||
+    !Number.isSafeInteger(value.recordVersion) ||
+    Number(value.recordVersion) < 1 ||
+    ![null, 'sdd-task-execution'].includes(value.linkedTicketKind as null | string)
+  ) throw new Error('INVALID_AGENT_ACTIVITY_ASSIGNMENT_DTO')
+}
+
+function hasExactKeys(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
+  if (!isPlainRecord(value)) return false
+  const actual = Object.keys(value)
+  return actual.length === keys.length && actual.every((key) => keys.includes(key))
+}
+
+function isAgentFamily(value: unknown): value is AgentFamily {
+  return value === 'claude' || value === 'codex' || value === 'pi'
+}
+
+function isPreciseSurface(value: unknown): value is PreciseExecutionSurface {
+  return value === 'claude-desktop-code' || value === 'claude-desktop-home' || value === 'claude-code-cli' ||
+    value === 'codex-desktop' || value === 'codex-cli' || value === 'pi-cli'
+}
+
+function isExecutionSurface(value: unknown): value is ExecutionSurface {
+  return value === 'legacy-ambiguous' || isPreciseSurface(value)
+}
+
+function familyForSurface(surface: PreciseExecutionSurface): AgentFamily {
+  if (surface.startsWith('claude-')) return 'claude'
+  if (surface.startsWith('codex-')) return 'codex'
+  return 'pi'
+}
+
+function legacyAgentForFamily(family: AgentFamily): AgentActivityAgentId {
+  return family === 'claude' ? 'claude-code' : family === 'codex' ? 'codex-cli' : 'pi'
+}
+
+function familyLabel(family: AgentFamily): string {
+  return family === 'claude' ? 'Claude' : family === 'codex' ? 'Codex' : 'Pi'
+}
+
+function surfaceLabel(surface: ExecutionSurface): string {
+  return {
+    'claude-desktop-code': 'Claude Desktop Code',
+    'claude-desktop-home': 'Claude Desktop Home',
+    'claude-code-cli': 'Claude Code CLI',
+    'codex-desktop': 'Codex Desktop',
+    'codex-cli': 'Codex CLI',
+    'pi-cli': 'Pi CLI',
+    'legacy-ambiguous': 'Legacy / ambiguous surface',
+  }[surface]
+}
+
+function integrationIdForSurface(surface: PreciseExecutionSurface): string {
+  return {
+    'claude-desktop-code': 'surface:claude-desktop-code',
+    'claude-desktop-home': 'surface:claude-desktop-home',
+    'claude-code-cli': 'surface:claude-code-cli',
+    'codex-desktop': 'surface:codex-desktop',
+    'codex-cli': 'surface:codex-cli',
+    'pi-cli': 'surface:pi-cli',
+  }[surface]
+}
+
+function nullableSafeString(value: unknown, maxLength: number): boolean {
+  return value === null || (typeof value === 'string' && value.length <= maxLength)
+}
+
+function nullableTimestamp(value: unknown): boolean {
+  return value === null || (typeof value === 'string' && Number.isFinite(Date.parse(value)))
+}
+
+function nullableSafeCode(value: unknown): boolean {
+  return value === null || (typeof value === 'string' && /^[A-Z0-9_-]{1,64}$/.test(value))
+}
+
+function boundedDtoCount(value: unknown): boolean {
+  return Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= 10_000
+}
+
+function validAssignmentProject(value: unknown): boolean {
+  if (!isPlainRecord(value) || typeof value.kind !== 'string') return false
+  if (value.kind === 'unassigned') return hasExactKeys(value, ['kind'])
+  if (value.kind === 'approved-project') return hasExactKeys(value, ['kind', 'id', 'label']) && typeof value.id === 'string' && typeof value.label === 'string'
+  return value.kind === 'needs-review' && hasExactKeys(value, ['kind', 'reviewId']) && typeof value.reviewId === 'string'
 }
 
 export function isNormalizedUsageRecordDto(input: unknown): input is NormalizedUsageRecordDto {

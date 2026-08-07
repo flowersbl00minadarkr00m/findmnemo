@@ -12,7 +12,7 @@ import { TicketLifecycleService } from '../tickets/ticket-lifecycle-service.js'
 import { ActivityIngress } from './activity-ingress.js'
 import { AgentActivityRepository } from './agent-activity-repository.js'
 import { AgentActivityService } from './agent-activity-service.js'
-import { ActivityCapabilityRegistry } from './capability-manifests.js'
+import { ActivityCapabilityRegistry, manualActivityRegistration } from './capability-manifests.js'
 import { IntegrationAuthService } from './integration-auth-service.js'
 import { ProjectAssociationService } from './project-association-service.js'
 
@@ -43,10 +43,74 @@ async function fixture() {
   const server = createServer((request, response) => { void ingress.handle(request, response, new URL(request.url ?? '/', 'http://127.0.0.1')).then((handled) => { if (!handled) { response.writeHead(404); response.end() } }) })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve)); running.push(server)
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('server unavailable')
-  return { root, database, repository, auth, firstToken, secondToken, logger, base: `http://127.0.0.1:${address.port}/api/v1/integration/agent-activity` }
+  return { root, database, repository, auth, firstToken, secondToken, logger, ingress, base: `http://127.0.0.1:${address.port}/api/v1/integration/agent-activity` }
 }
 
 describe('ActivityIngress', () => {
+  it('validates a strict v2 surface binding through the sanitizer without persisting production artifacts', async () => {
+    const { database, repository, ingress } = await fixture()
+    repository.registerIntegration({
+      ...manualActivityRegistration('surface:codex-cli', 'codex-cli'),
+      agentFamily: 'codex',
+      executionSurface: 'codex-cli',
+    })
+    const before = counts(database.db)
+    expect(() => ingress.validateOnly({
+      integrationId: 'surface:codex-cli',
+      agentFamily: 'codex',
+      executionSurface: 'codex-cli',
+      adapterVersion: 'manual-1.0.0',
+      observedAt: '2026-07-14T20:00:01.000Z',
+    })).not.toThrow()
+    expect(counts(database.db)).toEqual(before)
+    expect(() => ingress.validateOnly({
+      integrationId: 'surface:codex-cli',
+      agentFamily: 'codex',
+      executionSurface: 'codex-desktop',
+      adapterVersion: 'manual-1.0.0',
+      observedAt: '2026-07-14T20:00:01.000Z',
+    })).toThrow('ACTIVITY_SAFE_TEST_BINDING_MISMATCH')
+    database.close()
+  })
+
+  it('accepts an authenticated strict v2 event through real ingress and creates one precisely attributed assignment ticket', async () => {
+    const { database, repository, auth, base } = await fixture()
+    repository.registerIntegration({
+      ...manualActivityRegistration('surface:codex-desktop', 'codex-cli'),
+      agentFamily: 'codex',
+      executionSurface: 'codex-desktop',
+    })
+    const token = await auth.issue('surface:codex-desktop')
+    const before = counts(database.db)
+
+    const response = await postEvent(base, token, preciseEvent())
+    const receipt = await response.json() as Record<string, unknown>
+    const ticketId = String(receipt.ticketId)
+
+    expect(response.status).toBe(200)
+    expect(receipt).toMatchObject({
+      outcome: 'applied',
+      assignmentKey: expect.stringMatching(/^[a-f0-9]{64}$/),
+      ticketId: expect.stringContaining('agent-activity:'),
+    })
+    expect(repository.getAssignment(String(receipt.assignmentKey))).toMatchObject({
+      integrationId: 'surface:codex-desktop',
+      agentFamily: 'codex',
+      executionSurface: 'codex-desktop',
+      ticketId,
+      reportedState: 'active',
+    })
+    expect(database.db.prepare('SELECT id FROM tickets WHERE id=?').get(ticketId)).toEqual({ id: ticketId })
+    expect(counts(database.db)).toEqual({
+      tickets: before.tickets + 1,
+      agent_assignments: before.agent_assignments + 1,
+      agent_assignment_events: before.agent_assignment_events + 1,
+      agent_activity_snapshots: before.agent_activity_snapshots,
+      agent_project_reviews: before.agent_project_reviews,
+    })
+    database.close()
+  })
+
   it('accepts originless authenticated V1 events without browser CORS and exposes recovery immediately', async () => {
     const { database, repository, firstToken, base } = await fixture()
     const startedAt = Date.now()
@@ -115,6 +179,13 @@ describe('ActivityIngress', () => {
   })
 })
 
+function counts(db: import('node:sqlite').DatabaseSync): Record<string, number> {
+  return Object.fromEntries(['tickets', 'agent_assignments', 'agent_assignment_events', 'agent_activity_snapshots', 'agent_project_reviews'].map((table) => [
+    table,
+    Number((db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count),
+  ]))
+}
+
 function postEvent(base: string, token: string, body: unknown, headers: Record<string, string> = {}) {
   return fetch(`${base}/events`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-findmnemo-activity-token': token, ...headers }, body: JSON.stringify(body) })
 }
@@ -125,5 +196,31 @@ function event(integrationId: string, suffix: string) {
     assignment: { originAssignmentId: `assignment-${suffix}`, generation: 1, summary: { text: 'Safe ingress work', source: 'explicit-user' }, projectRef: { kind: 'unassigned' } },
     observation: { sequence: 1, kind: 'started', reportedState: 'active', observedAt: '2026-07-14T20:00:00.000Z', evidenceKind: 'codex-hook' },
     modelLabel: 'gpt-5-codex',
+  }
+}
+
+function preciseEvent() {
+  return {
+    schema: 'findmnemo.assignment-event.v2',
+    eventId: '028f6f7e-6f52-7e54-8aa5-000000000201',
+    integrationId: 'surface:codex-desktop',
+    agentFamily: 'codex',
+    executionSurface: 'codex-desktop',
+    adapterVersion: 'manual-1.0.0',
+    agentVersion: null,
+    assignment: {
+      originAssignmentId: 'precise-ingress-assignment',
+      generation: 1,
+      summary: { text: 'Precise desktop ingress work', source: 'explicit-user' },
+      projectRef: { kind: 'unassigned' },
+    },
+    observation: {
+      sequence: 1,
+      kind: 'started',
+      reportedState: 'active',
+      observedAt: '2026-07-14T20:00:00.000Z',
+      evidenceKind: 'mcp-tool',
+    },
+    model: null,
   }
 }

@@ -24,12 +24,13 @@ export class ExistingStateAdoptionService {
     const lifecycleSettingsPresent = await exists(join(this.dataRoot, 'lifecycle.json'))
     const databasePresent = await exists(this.#databasePath)
     const base = { databasePresent, credentialPresent, lifecycleSettingsPresent, listener, backupRequired: false, retainedLocation: '%LOCALAPPDATA%\\FindMnemo' as const }
-    if (await this.#readReceipt()) return { ...base, state: 'already-adopted' }
-    if (!databasePresent) return { ...base, state: listener === 'unknown' ? 'blocked' : 'fresh', errorCode: listener === 'unknown' ? 'ADOPTION_PORT_OWNER_UNKNOWN' : undefined }
-    const database = inspectDatabase(this.#databasePath)
-    if (!database.ok) return { ...base, state: 'blocked', schemaVersion: database.schemaVersion, errorCode: database.errorCode }
-    if (listener === 'unknown') return { ...base, state: 'blocked', schemaVersion: database.schemaVersion, errorCode: 'ADOPTION_PORT_OWNER_UNKNOWN' }
-    if (listener === 'compatible') return { ...base, state: 'requires-stop', schemaVersion: database.schemaVersion, backupRequired: database.schemaVersion < DATABASE_SCHEMA_VERSION, errorCode: 'ADOPTION_COMPATIBLE_COMPANION_RUNNING' }
+    const database = databasePresent ? inspectDatabase(this.#databasePath) : undefined
+    if (database && !database.ok) return { ...base, state: 'blocked', schemaVersion: database.schemaVersion, errorCode: database.errorCode }
+    const schemaVersion = database?.schemaVersion
+    if (listener === 'unknown') return { ...base, state: 'blocked', schemaVersion, errorCode: 'ADOPTION_PORT_OWNER_UNKNOWN' }
+    if (listener === 'compatible') return { ...base, state: 'requires-stop', schemaVersion, backupRequired: schemaVersion !== undefined && schemaVersion < DATABASE_SCHEMA_VERSION, errorCode: 'ADOPTION_COMPATIBLE_COMPANION_RUNNING' }
+    if (await this.#readReceipt()) return { ...base, state: 'already-adopted', schemaVersion }
+    if (!database) return { ...base, state: 'fresh' }
     return { ...base, state: 'ready', schemaVersion: database.schemaVersion, backupRequired: database.schemaVersion < DATABASE_SCHEMA_VERSION }
   }
 

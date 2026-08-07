@@ -38,7 +38,8 @@ export function adaptClientsV4(input: unknown, context: UsageAdapterContext): Us
     adapterId: context.adapterId,
     refreshedAt: context.refreshedAt,
     sources,
-    complete: sources.every((source) => source.state === 'available' && source.diagnosticCodes.length === 0),
+    complete: sources.some((source) => source.state === 'available')
+      && sources.filter((source) => source.state === 'available').every((source) => source.diagnosticCodes.length === 0),
     warnings: sources.some((source) => source.diagnosticCodes.length > 0) ? ['source-diagnostics-present'] : [],
   }
   assertUsageBoundarySafe(coverage)

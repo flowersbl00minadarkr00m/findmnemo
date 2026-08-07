@@ -13,10 +13,10 @@ const summary: UsageSummaryDto = {
   freshness: { state: 'current', lastSuccessfulRefreshAt: '2026-07-13T12:00:00.000Z', upstreamGeneratedAt: null }, duplicateConflictCount: 0, warnings: ['partial'],
 }
 
-function repository(state: UsageCapabilityDto['state'] = 'installed-supported'): OperationalRepository {
+function repository(state: UsageCapabilityDto['state'] = 'installed-supported', usageSummary: UsageSummaryDto = summary): OperationalRepository {
   return {
     listTickets: async () => [], createTicket: async () => { throw new Error('unused') }, updateTicketStatus: async (ticket) => ticket, addWorkNote: async (ticket) => ticket, deleteTicket: async () => undefined,
-    getUsageCapability: vi.fn(async () => capability(state)), getUsageSummary: vi.fn(async () => summary), getUsageRecords: vi.fn(async () => ({ schema: 'findmnemo.usage-records.v1' as const, records: [] as NormalizedUsageRecordDto[], nextCursor: null, totalCount: 0 })), listUsageMappings: vi.fn(async () => []), getRoutingPolicy: vi.fn(async () => null),
+    getUsageCapability: vi.fn(async () => capability(state)), getUsageSummary: vi.fn(async () => usageSummary), getUsageRecords: vi.fn(async () => ({ schema: 'findmnemo.usage-records.v1' as const, records: [] as NormalizedUsageRecordDto[], nextCursor: null, totalCount: 0 })), listUsageMappings: vi.fn(async () => []), getRoutingPolicy: vi.fn(async () => null),
     startUsageRefresh: vi.fn(async (input: { since: string; until: string }) => ({ schema: 'findmnemo.usage-refresh.v1' as const, id: 'run-1', state: 'complete' as const, stage: 'finished' as const, requestedAt: '2026-07-13T12:00:00.000Z', finishedAt: '2026-07-13T12:00:01.000Z', coverageStart: input.since, coverageEnd: input.until, commands: [], canonicalCount: 1, attributionCount: 0, warningCodes: [], errorCode: null, lastSuccessfulRefreshAt: '2026-07-13T12:00:01.000Z', retainedPreviousSuccess: false })),
     getUsageRefresh: vi.fn(), cancelUsageRefresh: vi.fn(),
   }
@@ -42,5 +42,25 @@ describe('operational model usage view', () => {
     expect(screen.getByText(/separate global Tokscale installation is not required/i)).toBeVisible()
     expect(screen.getByRole('link', { name: 'Open FindMnemo troubleshooting' })).toHaveAttribute('href', 'https://github.com/flowersbl00minadarkr00m/findmnemo#model-usage')
     expect(screen.getByRole('button', { name: 'Refresh usage' })).toBeDisabled()
+  })
+
+  it('reports complete detected coverage while disclosing unrelated unavailable catalog clients', async () => {
+    const completeSummary: UsageSummaryDto = {
+      ...summary,
+      coverage: {
+        ...summary.coverage!, complete: true, warnings: [],
+        sources: [
+          ...['claude', 'codex', 'pi'].map((clientId) => ({ clientId, state: 'available' as const, messageCount: 1, diagnosticCodes: [] })),
+          { clientId: 'optional-client', state: 'unavailable', messageCount: 0, diagnosticCodes: [] },
+        ],
+      },
+      warnings: [],
+    }
+    render(<UsageView repository={repository('installed-supported', completeSummary)} />)
+
+    expect(await screen.findByText('Complete for 3 detected sources in this scan.')).toBeVisible()
+    expect(screen.getByText(/not detected \(optional\)/i)).toBeVisible()
+    expect(screen.getByText(/Not billing or quota data/i)).toBeVisible()
+    expect(screen.getByText('Cache read')).toBeVisible()
   })
 })

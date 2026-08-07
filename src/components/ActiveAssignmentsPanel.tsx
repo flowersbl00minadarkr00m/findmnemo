@@ -5,6 +5,7 @@ import type {
   AgentActivityIntegrationDto,
   ProjectFolderSummaryDto,
 } from '../../shared/companion-contract'
+import { AgentActivityCoverageNotice } from './AgentActivityCoverageNotice'
 
 const STATE_ICON: Record<AgentActivityAssignmentSummaryDto['effectiveState'], string> = {
   active: '▶', waiting: '◷', blocked: '!', 'needs-action': '!', completed: '✓', failed: '×', cancelled: '–', stale: '◌',
@@ -52,12 +53,6 @@ export function ActiveAssignmentsPanel({
     } finally { setBusyId(undefined) }
   }
 
-  const emptyMessage = integrations.every((item) => !item.configured || !item.enabled)
-    ? 'Agent tracking is not connected. Set it up in Data & Privacy to observe current work.'
-    : integrations.some((item) => item.coverageState === 'stale' || item.coverageState === 'unavailable')
-      ? 'Coverage is stale or unavailable. Last successful states remain visible; review agent tracking to recover.'
-      : 'No active observed assignments in the current coverage window. This does not prove that no agent work exists.'
-
   return (
     <section aria-label="Active agent assignments" className="panel min-w-0 max-w-full overflow-hidden rounded-sm p-4 sm:p-5">
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
@@ -66,13 +61,13 @@ export function ActiveAssignmentsPanel({
           <h2 className="mt-1 text-lg font-semibold text-ink">Active agent assignments</h2>
           <p className="mt-1 text-sm text-mut">One card per assignment. Silence becomes stale, never completed.</p>
         </div>
-        {onOpenPrivacy && <button type="button" onClick={onOpenPrivacy} className="rounded-sm border border-line px-3 py-2 text-xs">Manage tracking</button>}
+        {onOpenPrivacy && assignments.length > 0 && <button type="button" onClick={onOpenPrivacy} className="rounded-sm border border-line px-3 py-2 text-xs">Manage tracking</button>}
       </div>
 
-      {(error || actionError) && <p role="alert" className="mt-3 rounded-sm border border-alert/40 bg-alert/10 px-3 py-2 text-sm text-alert">{actionError ?? error}</p>}
+      {(actionError || (error && assignments.length > 0)) && <p role="alert" className="mt-3 rounded-sm border border-alert/40 bg-alert/10 px-3 py-2 text-sm text-alert">{actionError ?? error}</p>}
       {receipt && <p ref={receiptRef} tabIndex={-1} role="status" className="mt-3 rounded-sm border border-ok/40 bg-ok/10 px-3 py-2 text-sm text-ok outline-none">{receipt}</p>}
       {loading && assignments.length === 0 && <p role="status" className="mt-4 text-sm text-mut">Loading active assignments…</p>}
-      {!loading && assignments.length === 0 && <p className="mt-4 rounded-sm border border-dashed border-line p-4 text-sm text-mut">{emptyMessage}</p>}
+      {!loading && assignments.length === 0 && <div className="mt-4"><AgentActivityCoverageNotice integrations={integrations} assignmentCount={0} error={error} onOpenPrivacy={onOpenPrivacy} /></div>}
 
       <div className="mt-4 grid min-w-0 grid-cols-1 gap-3 lg:grid-cols-2">
         {assignments.map((record) => {

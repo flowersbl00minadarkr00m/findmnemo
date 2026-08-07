@@ -4,7 +4,7 @@ import { dirname, isAbsolute } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { PlatformPathError, resolvePlatformPaths, type ResolvePlatformPathsInput } from '../platform/platform-paths.js'
 
-export const DATABASE_SCHEMA_VERSION = 12
+export const DATABASE_SCHEMA_VERSION = 13
 
 const MIGRATION_001 = `
 CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -441,6 +441,83 @@ function applyMigration012(db: DatabaseSync): void {
   if (configured || integration) db.prepare("UPDATE agent_activity_runtime SET capture_enabled=1,rollout_state='enabled',updated_at=datetime('now') WHERE singleton_id=1").run()
 }
 
+function applyMigration013(db: DatabaseSync): void {
+  addNullableColumns(db, 'agent_activity_integrations', {
+    agent_family: 'TEXT',
+    execution_surface: 'TEXT',
+  })
+  addNullableColumns(db, 'agent_assignments', {
+    agent_family: 'TEXT',
+    execution_surface: 'TEXT',
+    model_source: 'TEXT',
+    model_confidence: 'TEXT',
+  })
+  addNullableColumns(db, 'agent_assignment_events', {
+    agent_family: 'TEXT',
+    execution_surface: 'TEXT',
+    model_source: 'TEXT',
+    model_confidence: 'TEXT',
+  })
+
+  db.exec(`
+    UPDATE agent_activity_integrations
+      SET agent_family=COALESCE(agent_family,CASE agent_kind
+        WHEN 'claude-code' THEN 'claude'
+        WHEN 'codex-cli' THEN 'codex'
+        WHEN 'pi' THEN 'pi'
+      END),
+      execution_surface=COALESCE(execution_surface,'legacy-ambiguous');
+    UPDATE agent_assignments
+      SET agent_family=COALESCE(agent_family,CASE agent_kind
+        WHEN 'claude-code' THEN 'claude'
+        WHEN 'codex-cli' THEN 'codex'
+        WHEN 'pi' THEN 'pi'
+      END),
+      execution_surface=COALESCE(execution_surface,'legacy-ambiguous');
+    UPDATE agent_assignment_events
+      SET agent_family=COALESCE(agent_family,(
+        SELECT agent_family FROM agent_assignments
+        WHERE agent_assignments.assignment_key=agent_assignment_events.assignment_key
+      )),
+      execution_surface=COALESCE(execution_surface,(
+        SELECT execution_surface FROM agent_assignments
+        WHERE agent_assignments.assignment_key=agent_assignment_events.assignment_key
+      ));
+  `)
+
+  const invalidAttribution = Number((db.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM agent_activity_integrations
+        WHERE agent_family NOT IN ('claude','codex','pi')
+          OR execution_surface NOT IN ('claude-desktop-code','claude-desktop-home','claude-code-cli','codex-desktop','codex-cli','pi-cli','legacy-ambiguous')
+          OR agent_family IS NULL OR execution_surface IS NULL)
+      +
+      (SELECT COUNT(*) FROM agent_assignments
+        WHERE agent_family NOT IN ('claude','codex','pi')
+          OR execution_surface NOT IN ('claude-desktop-code','claude-desktop-home','claude-code-cli','codex-desktop','codex-cli','pi-cli','legacy-ambiguous')
+          OR agent_family IS NULL OR execution_surface IS NULL)
+      +
+      (SELECT COUNT(*) FROM agent_assignment_events
+        WHERE agent_family NOT IN ('claude','codex','pi')
+          OR execution_surface NOT IN ('claude-desktop-code','claude-desktop-home','claude-code-cli','codex-desktop','codex-cli','pi-cli','legacy-ambiguous')
+          OR agent_family IS NULL OR execution_surface IS NULL)
+      AS count
+  `).get() as { count: number }).count)
+  if (invalidAttribution !== 0) throw new Error('Agent activity attribution migration integrity check failed.')
+  const foreignKeyFailures = db.prepare('PRAGMA foreign_key_check').all()
+  if (foreignKeyFailures.length > 0) throw new Error('Agent activity attribution migration foreign-key check failed.')
+  const integrity = db.prepare('PRAGMA integrity_check').get() as Record<string, unknown>
+  if (!Object.values(integrity).includes('ok')) throw new Error('Agent activity attribution migration database integrity check failed.')
+  db.prepare("UPDATE app_meta SET value='13' WHERE key='schema_version'").run()
+}
+
+function addNullableColumns(db: DatabaseSync, table: string, additions: Record<string, string>): void {
+  const columns = new Set((db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((column) => column.name))
+  for (const [name, definition] of Object.entries(additions)) {
+    if (!columns.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`)
+  }
+}
+
 export interface OpenDatabaseOptions {
   path?: string
   localAppData?: string
@@ -491,6 +568,7 @@ export async function openFindMnemoDatabase(options: OpenDatabaseOptions = {}): 
     if (currentVersion < 10) runTransaction(db, () => applyMigration010(db))
     if (currentVersion < 11) runTransaction(db, () => applyMigration011(db))
     if (currentVersion < 12) runTransaction(db, () => applyMigration012(db))
+    if (currentVersion < 13) runTransaction(db, () => applyMigration013(db))
     recoverInterruptedRuns(db)
   } catch (cause) {
     db.close()

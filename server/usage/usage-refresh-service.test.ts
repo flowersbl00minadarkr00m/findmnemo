@@ -23,6 +23,7 @@ function supportedCapability(): UsageCapabilityDto {
 class FakeExecutor implements UsageCommandExecutor {
   failures = new Map<string, TokscaleCommandOutcome>()
   blocking = false
+  clientsOverride?: string
 
   async capability(): Promise<UsageCapabilityDto> { return supportedCapability() }
   async run(input: TokscaleRecipeInput, signal: AbortSignal): Promise<TokscaleCommandOutcome> {
@@ -32,6 +33,7 @@ class FakeExecutor implements UsageCommandExecutor {
     }
     const failure = this.failures.get(input.recipeId)
     if (failure) return failure
+    if (input.recipeId === 'clients' && this.clientsOverride) return { ok: true, recipeId: input.recipeId, json: this.clientsOverride, durationMs: 2 }
     const filename = input.recipeId === 'canonical-graph' ? 'graph.json' : input.recipeId === 'clients' ? 'clients.json' : input.recipeId === 'session-attribution' ? 'models-session.json' : 'models-workspace.json'
     return { ok: true, recipeId: input.recipeId, json: await readFile(join(fixtureRoot, filename), 'utf8'), durationMs: 2 }
   }
@@ -57,6 +59,23 @@ async function terminalRun(service: UsageRefreshService, runId: string): Promise
 }
 
 describe('manual usage refresh', () => {
+  it('finishes complete for detected sources while retaining unrelated unavailable catalog facts', async () => {
+    const { database, repository, executor, service } = await harness()
+    executor.clientsOverride = JSON.stringify({
+      clients: [
+        ...['claude', 'codex', 'pi'].map((client) => ({ client, messageCount: 1, sessionsPathExists: true, diagnostics: [] })),
+        ...Array.from({ length: 36 }, (_, index) => ({ client: `optional-${index + 1}`, messageCount: 0, sessionsPathExists: false, diagnostics: [] })),
+      ],
+    })
+
+    const final = await terminalRun(service, service.start({ since: '2026-07-01', until: '2026-07-13' }).id)
+    expect(final).toMatchObject({ state: 'complete', warningCodes: [] })
+    expect(repository.latestCoverage()).toMatchObject({ complete: true })
+    expect(repository.latestCoverage()?.sources.filter((source) => source.state === 'available').map((source) => source.clientId)).toEqual(['claude', 'codex', 'pi'])
+    expect(repository.latestCoverage()?.sources.filter((source) => source.state === 'unavailable')).toHaveLength(36)
+    database.close()
+  })
+
   it('commits canonical evidence as partial when independent sidecars fail', async () => {
     const { database, repository, executor, service } = await harness()
     executor.failures.set('clients', { ok: false, recipeId: 'clients', code: 'TOKSCALE_PROCESS_FAILED', durationMs: 2 })

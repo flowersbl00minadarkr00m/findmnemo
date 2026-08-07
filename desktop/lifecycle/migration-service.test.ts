@@ -28,6 +28,26 @@ describe('ExistingStateAdoptionService', () => {
     await expect(new ExistingStateAdoptionService(dataRoot, listener(listenerState)).adopt()).resolves.toMatchObject({ state, errorCode })
   })
 
+  it('keeps current listener evidence authoritative after adoption and recovers when the compatible source listener exits', async () => {
+    const dataRoot = await root(); const database = await openFindMnemoDatabase({ path: join(dataRoot, 'findmnemo.db') }); database.close()
+    let listenerState: 'none' | 'compatible' | 'unknown' = 'none'
+    const inspector: ListenerInspectorPort = { inspect: vi.fn(async () => listenerState) }
+    const service = new ExistingStateAdoptionService(dataRoot, inspector)
+    await expect(service.adopt()).resolves.toMatchObject({ state: 'adopted' })
+
+    listenerState = 'compatible'
+    await expect(service.inspect()).resolves.toMatchObject({ state: 'requires-stop', listener: 'compatible', errorCode: 'ADOPTION_COMPATIBLE_COMPANION_RUNNING' })
+    listenerState = 'none'
+    await expect(service.inspect()).resolves.toMatchObject({ state: 'already-adopted', listener: 'none' })
+  })
+
+  it('reports a compatible listener even when there is no existing database to adopt', async () => {
+    const dataRoot = await root()
+    await expect(new ExistingStateAdoptionService(dataRoot, listener('compatible')).inspect()).resolves.toMatchObject({
+      state: 'requires-stop', listener: 'compatible', databasePresent: false, errorCode: 'ADOPTION_COMPATIBLE_COMPANION_RUNNING',
+    })
+  })
+
   it('blocks newer and corrupt databases without mutation', async () => {
     const newerRoot = await root(); const newerPath = join(newerRoot, 'findmnemo.db'); const newer = await openFindMnemoDatabase({ path: newerPath }); newer.db.prepare("UPDATE app_meta SET value='99' WHERE key='schema_version'").run(); newer.close()
     await expect(new ExistingStateAdoptionService(newerRoot, listener()).adopt()).resolves.toMatchObject({ state: 'blocked', errorCode: 'ADOPTION_DATABASE_NEWER' })

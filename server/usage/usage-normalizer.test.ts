@@ -114,6 +114,19 @@ describe('Tokscale v4 usage contract', () => {
     expect(JSON.stringify(coverage)).not.toContain('SANITIZED_PATH')
   })
 
+  it('measures completeness against detected sources without degrading for unrelated catalog clients', () => {
+    const available = ['claude', 'codex', 'pi'].map((client) => ({ client, messageCount: 1, sessionsPathExists: true, diagnostics: [] }))
+    const optional = Array.from({ length: 36 }, (_, index) => ({ client: `optional-${index + 1}`, messageCount: 0, sessionsPathExists: false, diagnostics: [] }))
+    const coverage = adaptClientsV4({ clients: [...available, ...optional] }, context('4.5.2'))
+
+    expect(coverage).toMatchObject({ complete: true })
+    expect(coverage.sources.filter((source) => source.state === 'available').map((source) => source.clientId)).toEqual(['claude', 'codex', 'pi'])
+    expect(coverage.sources.filter((source) => source.state === 'unavailable')).toHaveLength(36)
+
+    const failedDesired = adaptClientsV4({ clients: [{ ...available[0], diagnostics: [{ code: 'INDEX_PARTIAL' }] }, ...optional] }, context('4.5.2'))
+    expect(failedDesired).toMatchObject({ complete: false, warnings: ['source-diagnostics-present'] })
+  })
+
   it('rejects prohibited upstream fields and unsafe browser DTOs', () => {
     const raw = structuredClone(fixture('v4.5.2', 'graph')) as Record<string, unknown>
     raw.prompt = 'do not retain this'

@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   AssignmentEventValidationError,
+  normalizeAssignmentEvent,
   parseAssignmentEventV1,
+  parseAssignmentEventV2,
   type AssignmentEventV1,
+  type AssignmentEventV2,
 } from './agent-activity-contract.js'
 
 export function assignmentEventFixture(overrides: Partial<AssignmentEventV1> = {}): AssignmentEventV1 {
@@ -28,6 +31,38 @@ export function assignmentEventFixture(overrides: Partial<AssignmentEventV1> = {
       originEvidenceId: 'private-origin-evidence-7',
     },
     modelLabel: 'gpt-5-codex',
+    ...overrides,
+  }
+}
+
+export function assignmentEventV2Fixture(overrides: Partial<AssignmentEventV2> = {}): AssignmentEventV2 {
+  return {
+    schema: 'findmnemo.assignment-event.v2',
+    eventId: '028f6f7e-6f52-7e54-8aa5-3f44fc884b42',
+    integrationId: 'integration-codex-desktop-1',
+    agentFamily: 'codex',
+    executionSurface: 'codex-desktop',
+    adapterVersion: '2.0.0',
+    agentVersion: '1.2.3',
+    assignment: {
+      originAssignmentId: 'private-origin-assignment-42',
+      generation: 1,
+      summary: { text: 'Implement the surface-aware tracer', source: 'explicit-user' },
+      projectRef: { kind: 'unassigned' },
+    },
+    observation: {
+      sequence: 1,
+      kind: 'started',
+      reportedState: 'active',
+      observedAt: '2026-07-14T17:00:00.000Z',
+      evidenceKind: 'mcp-tool',
+      originEvidenceId: 'private-origin-evidence-v2-7',
+    },
+    model: {
+      label: 'openai/gpt-5-codex',
+      source: 'host-reported',
+      confidence: 'reported',
+    },
     ...overrides,
   }
 }
@@ -96,4 +131,82 @@ describe('assignment event v1 contract', () => {
       })).event.observation.evidenceKind).toBe(evidenceKind)
     },
   )
+
+  it('keeps strict v1 model rejection unchanged', () => {
+    expect(() => parseAssignmentEventV1(assignmentEventFixture({ modelLabel: 'password=private-value' })))
+      .toThrowError(expect.objectContaining({ code: 'INVALID_MODEL_LABEL' }))
+  })
+})
+
+describe('assignment event v2 contract', () => {
+  it('accepts exact v2 input and normalizes family, surface, and model attribution separately from v1', () => {
+    const parsed = parseAssignmentEventV2(assignmentEventV2Fixture())
+    expect(parsed).toEqual({ event: assignmentEventV2Fixture(), receiptCodes: [] })
+    expect(normalizeAssignmentEvent(parsed.event)).toMatchObject({
+      schemaVersion: 'v2',
+      identityVersion: 'v2',
+      agent: 'codex-cli',
+      agentFamily: 'codex',
+      executionSurface: 'codex-desktop',
+      modelLabel: 'openai/gpt-5-codex',
+      modelSource: 'host-reported',
+      modelConfidence: 'reported',
+    })
+    expect(normalizeAssignmentEvent(assignmentEventFixture())).toMatchObject({
+      schemaVersion: 'v1',
+      identityVersion: 'v1',
+      agentFamily: 'codex',
+      executionSurface: 'legacy-ambiguous',
+      modelLabel: 'gpt-5-codex',
+      modelSource: null,
+      modelConfidence: null,
+    })
+  })
+
+  it.each([
+    ['family/surface mismatch', { ...assignmentEventV2Fixture(), agentFamily: 'claude' }],
+    ['new legacy ambiguity', { ...assignmentEventV2Fixture(), executionSurface: 'legacy-ambiguous' }],
+    ['unknown root key', { ...assignmentEventV2Fixture(), extra: true }],
+    ['private nested key', {
+      ...assignmentEventV2Fixture(),
+      assignment: { ...assignmentEventV2Fixture().assignment, transcript: 'private' },
+    }],
+    ['usage field', { ...assignmentEventV2Fixture(), tokenCount: 123 }],
+  ])('rejects %s', (_name, value) => {
+    expect(() => parseAssignmentEventV2(value)).toThrow(AssignmentEventValidationError)
+  })
+
+  it('validates structural and private keys before ignoring an invalid optional model label', () => {
+    const privateValue = 'password=never-persist-this'
+    const structurallyUnsafe = {
+      ...assignmentEventV2Fixture(),
+      response: 'private',
+      model: { label: privateValue, source: 'host-reported', confidence: 'reported' },
+    }
+    expect(() => parseAssignmentEventV2(structurallyUnsafe))
+      .toThrowError(expect.objectContaining({ code: 'PRIVATE_KEY_NOT_ALLOWED' }))
+
+    const parsed = parseAssignmentEventV2({
+      ...assignmentEventV2Fixture(),
+      model: { label: privateValue, source: 'host-reported', confidence: 'reported' },
+    })
+    expect(parsed.event.model).toBeNull()
+    expect(parsed.receiptCodes).toEqual(['MODEL_LABEL_IGNORED'])
+    expect(JSON.stringify(parsed)).not.toContain(privateValue)
+  })
+
+  it.each([
+    undefined,
+    null,
+  ])('continues with a null normalized model when the v2 model is %s', (model) => {
+    const input = { ...assignmentEventV2Fixture(), model }
+    if (model === undefined) delete (input as Partial<AssignmentEventV2>).model
+    const parsed = parseAssignmentEventV2(input)
+    expect(normalizeAssignmentEvent(parsed.event)).toMatchObject({
+      modelLabel: null,
+      modelSource: null,
+      modelConfidence: null,
+    })
+    expect(parsed.receiptCodes).toEqual([])
+  })
 })

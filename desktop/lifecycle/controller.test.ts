@@ -33,6 +33,17 @@ describe('LifecycleController', () => {
     expect(host.stop).not.toHaveBeenCalled()
   })
 
+  it('recovers on a later start after a listener conflict disappears', async () => {
+    const { host, controller } = setup()
+    vi.mocked(host.start)
+      .mockRejectedValueOnce(Object.assign(new Error('occupied'), { code: 'COMPANION_ALREADY_RUNNING' }))
+      .mockResolvedValueOnce({ version: '0.1.0', host: '127.0.0.1', port: 3210 })
+
+    await expect(controller.start()).resolves.toMatchObject({ ok: false, errorCode: 'COMPANION_ALREADY_RUNNING' })
+    await expect(controller.start()).resolves.toMatchObject({ ok: true, state: { phase: 'healthy', companion: { state: 'healthy' } } })
+    expect(host.stop).not.toHaveBeenCalled()
+  })
+
   it('stops once and removes healthy evidence', async () => {
     const { host, controller } = setup()
     await controller.start()

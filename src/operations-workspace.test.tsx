@@ -29,6 +29,33 @@ function integration(state: AgentActivityIntegrationDto['coverageState']): Agent
   }
 }
 
+function disconnectedIntegration(): AgentActivityIntegrationDto {
+  return {
+    ...integration('unavailable'),
+    configured: false,
+    enabled: false,
+    integrationAuthState: 'not-configured',
+    trustState: 'not-applicable',
+    lastEventAt: null,
+    lastSuccessAt: null,
+    retainedLastSuccess: false,
+    coverageExplanation: 'Enable tracking to begin.',
+    primaryAction: 'enable',
+  }
+}
+
+function unsupportedIntegration(): AgentActivityIntegrationDto {
+  return {
+    ...disconnectedIntegration(),
+    supported: false,
+    supportLevel: 'unsupported',
+    coverageState: 'unsupported',
+    coverageExplanation: 'This version is not qualified for automatic activity capture.',
+    capabilities: { detection: true, manual: true, snapshot: 'none', automaticEvents: 'none', automaticTerminal: 'none' },
+    primaryAction: 'manual-report',
+  }
+}
+
 describe('active assignment operations workspace', () => {
   it('places needs-action and stale truth in My Day without duplicating the linked ticket', () => {
     const projection = projectAttentionWorkspace({ tickets: [ticket()], agentAssignments: [assignment], agentIntegrations: [integration('stale')], ticketState: 'current', now: '2026-07-14T20:20:00.000Z' })
@@ -63,5 +90,41 @@ describe('active assignment operations workspace', () => {
     expect(onUpdate).toHaveBeenCalledTimes(2)
     fireEvent.click(screen.getByRole('button', { name: 'Confirm close assignment' }))
     await waitFor(() => expect(onUpdate).toHaveBeenCalledWith(assignment.id, { expectedVersion: 3, sourceUpdatePolicy: 'closed' }))
+  })
+
+  it('explains that installed agents do not create tickets until tracking reports an assignment', () => {
+    const onOpenPrivacy = vi.fn()
+    render(<ActiveAssignmentsPanel assignments={[]} projects={[]} integrations={[disconnectedIntegration()]} onOpenPrivacy={onOpenPrivacy} />)
+
+    expect(screen.getByRole('heading', { name: 'Automatic agent tracking is off' })).toBeVisible()
+    expect(screen.getByText(/installing or using Codex, Claude Code, or Pi does not connect it to FindMnemo/i)).toBeVisible()
+    expect(screen.getByText(/tickets are created only after an enabled integration reports an assignment/i)).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Set up agent tracking' }))
+    expect(onOpenPrivacy).toHaveBeenCalledOnce()
+  })
+
+  it('distinguishes connected coverage with no observed assignment from disconnected tracking', () => {
+    render(<ActiveAssignmentsPanel assignments={[]} projects={[]} integrations={[integration('empty')]} />)
+
+    expect(screen.getByRole('heading', { name: 'Tracking is connected; no assignment observed' })).toBeVisible()
+    expect(screen.getByText(/does not prove that no agent work exists/i)).toBeVisible()
+    expect(screen.queryByRole('heading', { name: 'Automatic agent tracking is off' })).not.toBeInTheDocument()
+  })
+
+  it('prefers the manual-only explanation when every detected integration is unsupported and disabled', () => {
+    const onOpenPrivacy = vi.fn()
+    render(<ActiveAssignmentsPanel assignments={[]} projects={[]} integrations={[unsupportedIntegration()]} onOpenPrivacy={onOpenPrivacy} />)
+
+    expect(screen.getByRole('heading', { name: 'Automatic tracking is unsupported for these agent versions' })).toBeVisible()
+    expect(screen.queryByRole('heading', { name: 'Automatic agent tracking is off' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Review manual options' }))
+    expect(onOpenPrivacy).toHaveBeenCalledOnce()
+  })
+
+  it('does not claim tracking is disconnected while assignment coverage is loading', () => {
+    render(<ActiveAssignmentsPanel assignments={[]} projects={[]} integrations={[]} loading />)
+
+    expect(screen.getByRole('status')).toHaveTextContent('Loading active assignments')
+    expect(screen.queryByRole('heading', { name: 'Automatic agent tracking is off' })).not.toBeInTheDocument()
   })
 })

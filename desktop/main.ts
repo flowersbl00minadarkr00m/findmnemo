@@ -22,6 +22,8 @@ import { UpdateRecoveryStore } from './lifecycle/update-recovery.js'
 import { UninstallService } from './lifecycle/uninstall.js'
 import { activityReporterCommand } from './agent-activity/reporter-command.js'
 import { runActivityHookReporter } from '../server/agent-activity/hook-reporter-command.js'
+import { mcpProcessFailureCode, runMcpProcess } from '../server/mcp/findmnemo-mcp.js'
+import { selectDesktopProcessMode } from './process-mode.js'
 
 const currentDirectory = fileURLToPath(new URL('.', import.meta.url))
 const { autoUpdater } = electronUpdater
@@ -50,17 +52,35 @@ let updateRecovery: UpdateRecoveryStore | undefined
 const supportDestinations = new Map<string, { path: string; expiresAt: number }>()
 let quitting = false
 
-protocol.registerSchemesAsPrivileged([{ scheme: 'findmnemo', privileges: { standard: true, secure: true, stream: true, supportFetchAPI: false, corsEnabled: false } }])
+const processMode = selectDesktopProcessMode(process.argv.slice(1))
 
-if (process.argv.includes('--activity-hook')) void app.whenReady().then(async () => {
+if (processMode.kind === 'invalid') {
+  process.stderr.write(`${processMode.errorCode}\n`)
+  app.exit(1)
+} else if (processMode.kind === 'mcp-server') {
+  void runMcpProcess({
+    args: processMode.runnerArgs,
+    input: process.stdin,
+    writeStdout: (line) => { process.stdout.write(line) },
+  }).then(
+    () => { app.exit(0) },
+    (cause) => {
+      process.stderr.write(`${mcpProcessFailureCode(cause)}\n`)
+      app.exit(1)
+    },
+  )
+} else if (processMode.kind === 'activity-hook') void app.whenReady().then(async () => {
   const outcome = await runActivityHookReporter()
   if (process.env.FINDMNEMO_ACTIVITY_ACCEPTANCE === '1') process.stdout.write(`${outcome}\n`)
   app.exit(0)
 }, () => app.exit(1))
-else if (process.argv.includes('--apply-uninstall-plan')) void app.whenReady().then(applyUninstallPlan)
+else if (processMode.kind === 'apply-uninstall-plan') void app.whenReady().then(applyUninstallPlan)
 else if (!app.requestSingleInstanceLock()) app.quit()
 else {
+  protocol.registerSchemesAsPrivileged([{ scheme: 'findmnemo', privileges: { standard: true, secure: true, stream: true, supportFetchAPI: false, corsEnabled: false } }])
   app.on('second-instance', () => showWindow())
+  app.on('before-quit', () => { quitting = true })
+  app.on('window-all-closed', () => { /* Tray process remains authoritative. */ })
   void app.whenReady().then(boot)
 }
 
@@ -395,6 +415,3 @@ async function quitApplication(): Promise<void> {
   quitting = true
   try { await controller?.stop() } finally { app.quit() }
 }
-
-app.on('before-quit', () => { quitting = true })
-app.on('window-all-closed', () => { /* Tray process remains authoritative. */ })
