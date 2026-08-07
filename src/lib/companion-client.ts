@@ -43,6 +43,7 @@ import {
   type AgentActivityManagementReceiptDto,
   type AgentActivityProjectReviewDto,
 } from '../../shared/companion-contract'
+import { COMPANION_PROBE_TIMEOUT_MS, createUnreachableError, isUnreachableCause } from './companion-connection'
 import type { GmailSourceStatus } from './operational-repository'
 import type { LegacyMigrationRecord, LegacyMigrationResult } from './operational-repository'
 import type { Ticket } from '../types'
@@ -50,7 +51,7 @@ import type { Ticket } from '../types'
 const COMPANION_BASE_URL = 'http://127.0.0.1:3210/api/v1'
 const STALE_AFTER_MS = 2 * 60_000
 const SESSION_ROTATION_LEAD_MS = 2 * 60_000
-const IDENTITY_REQUEST_TIMEOUT_MS = 6_000
+const IDENTITY_REQUEST_TIMEOUT_MS = COMPANION_PROBE_TIMEOUT_MS
 
 export interface CompanionSession {
   token: string
@@ -90,6 +91,15 @@ function browserNonce(): string {
   return btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
 }
 
+/** `fetch` that turns transport failures into a classified, user-readable error. */
+async function companionFetch(input: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init)
+  } catch (cause) {
+    throw createUnreachableError(cause)
+  }
+}
+
 async function request<T>(path: string, init: RequestInit = {}, session?: CompanionSession): Promise<CompanionApiResponse<T>> {
   const headers = new Headers(init.headers)
   headers.set('x-findmnemo-protocol-version', COMPANION_PROTOCOL_VERSION)
@@ -98,8 +108,13 @@ async function request<T>(path: string, init: RequestInit = {}, session?: Compan
     headers.set('x-findmnemo-browser-nonce', session.browserNonce)
   }
   if (init.body !== undefined) headers.set('content-type', 'application/json')
-  const response = await fetch(`${COMPANION_BASE_URL}${path}`, { ...init, headers, redirect: 'error' })
-  return await response.json() as CompanionApiResponse<T>
+  const response = await companionFetch(`${COMPANION_BASE_URL}${path}`, { ...init, headers, redirect: 'error' })
+  try {
+    return await response.json() as CompanionApiResponse<T>
+  } catch (cause) {
+    if (isUnreachableCause(cause)) throw createUnreachableError(cause)
+    throw new CompanionApiRequestError('COMPANION_RESPONSE_INVALID', 'The local companion returned a response FindMnemo could not read. Restart the companion and retry.')
+  }
 }
 
 export function deriveCompanionConnectionState(
@@ -191,7 +206,7 @@ export async function queryCompletedWork(session: CompanionSession, query: Compl
 
 export async function exportCompletedWork(session: CompanionSession, query: CompletedWorkQueryDto, format: 'json' | 'csv'): Promise<Blob> {
   const parameters = new URLSearchParams({ start: query.startInclusive, end: query.endExclusive, timeZone: query.timeZone, format })
-  const response = await fetch(`${COMPANION_BASE_URL}/completed-work/export?${parameters}`, { headers: { authorization: `Bearer ${session.token}`, 'x-findmnemo-browser-nonce': session.browserNonce, 'x-findmnemo-protocol-version': COMPANION_PROTOCOL_VERSION }, redirect: 'error' })
+  const response = await companionFetch(`${COMPANION_BASE_URL}/completed-work/export?${parameters}`, { headers: { authorization: `Bearer ${session.token}`, 'x-findmnemo-browser-nonce': session.browserNonce, 'x-findmnemo-protocol-version': COMPANION_PROTOCOL_VERSION }, redirect: 'error' })
   if (!response.ok) throw new CompanionApiRequestError('INVALID_REQUEST', 'Completed-work export failed.')
   return response.blob()
 }
@@ -445,7 +460,7 @@ export async function getUsageRouteObservations(session: CompanionSession, filte
 export async function downloadUsageExport(session: CompanionSession, filters: UsageQueryDto, format: 'json' | 'csv', includeAttribution = false): Promise<void> {
   const search = usageSearch(filters)
   const headers = new Headers({ authorization: `Bearer ${session.token}`, 'x-findmnemo-browser-nonce': session.browserNonce, 'x-findmnemo-protocol-version': COMPANION_PROTOCOL_VERSION })
-  const response = await fetch(`${COMPANION_BASE_URL}/usage/export?${search}&format=${format}&includeAttribution=${includeAttribution}`, { headers, redirect: 'error' })
+  const response = await companionFetch(`${COMPANION_BASE_URL}/usage/export?${search}&format=${format}&includeAttribution=${includeAttribution}`, { headers, redirect: 'error' })
   if (!response.ok) throw new CompanionApiRequestError('SOURCE_UNAVAILABLE', 'Usage export failed.')
   const filename = `findmnemo-usage.${format}`
   const picker = (window as Window & { showSaveFilePicker?: (options: { suggestedName: string; types: Array<{ description: string; accept: Record<string, string[]> }> }) => Promise<{ createWritable: () => Promise<WritableStream> }> }).showSaveFilePicker
@@ -466,7 +481,7 @@ export async function getDataExportPreview(session: CompanionSession): Promise<D
 
 export async function downloadDataBundle(session: CompanionSession, categoryIds: DataCategoryId[]): Promise<void> {
   const headers = new Headers({ authorization: `Bearer ${session.token}`, 'content-type': 'application/json', 'x-findmnemo-browser-nonce': session.browserNonce, 'x-findmnemo-protocol-version': COMPANION_PROTOCOL_VERSION })
-  const response = await fetch(`${COMPANION_BASE_URL}/data/export`, { method: 'POST', headers, body: JSON.stringify({ categoryIds }), redirect: 'error' })
+  const response = await companionFetch(`${COMPANION_BASE_URL}/data/export`, { method: 'POST', headers, body: JSON.stringify({ categoryIds }), redirect: 'error' })
   if (!response.ok) throw new CompanionApiRequestError('SOURCE_UNAVAILABLE', 'Data export failed.')
   const disposition = response.headers.get('content-disposition') ?? ''
   const filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? `findmnemo-data-${new Date().toISOString().slice(0, 10)}.findmnemo.json`

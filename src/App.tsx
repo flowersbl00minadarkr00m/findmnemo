@@ -26,6 +26,7 @@ import { LegacyMigrationPanel } from './components/LegacyMigrationPanel'
 import { CompletedWorkPanel } from './components/CompletedWorkPanel'
 import { loadCompletedWorkPreference, saveCompletedWorkPreference } from './lib/completed-work-preference'
 import { SourceSetup } from './components/SourceSetup'
+import { describeCompanionFailure } from './lib/companion-connection'
 import { ActiveAssignmentsPanel } from './components/ActiveAssignmentsPanel'
 
 const Analytics = lazy(() => import('./components/Analytics').then((module) => ({ default: module.Analytics })))
@@ -109,7 +110,7 @@ export default function App({ operationalRepository }: { operationalRepository: 
       setOperationalTicketError(undefined)
     } catch (cause) {
       setOperationalTicketState((state) => tickets.length > 0 || state === 'current' ? 'stale' : 'error')
-      setOperationalTicketError(cause instanceof Error ? cause.message : 'Companion ticket request failed.')
+      setOperationalTicketError(describeCompanionFailure(cause, 'Companion ticket request failed.'))
     }
   }, [operationalRepository, tickets.length])
 
@@ -131,7 +132,7 @@ export default function App({ operationalRepository }: { operationalRepository: 
       setAgentIntegrations(integrations)
       setAgentProjects(projects)
       setAgentActivityError(undefined)
-    } catch (cause) { setAgentActivityError(cause instanceof Error ? cause.message : 'Agent activity is unavailable.') }
+    } catch (cause) { setAgentActivityError(describeCompanionFailure(cause, 'Agent activity is unavailable.')) }
     finally { setAgentActivityLoading(false) }
   }, [operationalRepository])
 
@@ -145,7 +146,7 @@ export default function App({ operationalRepository }: { operationalRepository: 
       setAgentAssignments((current) => [...new Map([...current, ...page.items].map((item) => [item.id, item])).values()])
       setAgentAssignmentCursor(page.nextCursor)
       setAgentActivityError(undefined)
-    } catch (cause) { setAgentActivityError(cause instanceof Error ? cause.message : 'More assignments could not be loaded.') }
+    } catch (cause) { setAgentActivityError(describeCompanionFailure(cause, 'More assignments could not be loaded.')) }
     finally { setAgentActivityLoading(false) }
   }, [agentAssignmentCursor, operationalRepository])
 
@@ -170,7 +171,7 @@ export default function App({ operationalRepository }: { operationalRepository: 
       if (status) setGmailSourceStatus(status)
       setGmailError(undefined)
     } catch (cause) {
-      setGmailError(cause instanceof Error ? cause.message : 'Gmail candidate refresh failed.')
+      setGmailError(describeCompanionFailure(cause, 'Gmail candidate refresh failed.'))
     }
   }, [operationalRepository])
 
@@ -185,7 +186,7 @@ export default function App({ operationalRepository }: { operationalRepository: 
         setReconciliationRun(runs[0])
         setLastReconciliationSuccess(runs.find((run) => run.state === 'complete')?.finishedAt)
       })
-      .catch((cause) => setReconciliationError(cause instanceof Error ? cause.message : 'Reconciliation history is unavailable.'))
+      .catch((cause) => setReconciliationError(describeCompanionFailure(cause, 'Reconciliation history is unavailable.')))
   }, [operationalRepository])
 
   useEffect(() => {
@@ -228,7 +229,7 @@ export default function App({ operationalRepository }: { operationalRepository: 
   const handleCreate = useCallback((title: string, description: string, source: LLMSource) => {
     void operationalRepository.createTicket(title, description, source)
       .then((ticket) => { setTickets((prev) => [...prev, ticket]); setOperationalTicketState('current') })
-      .catch((cause) => { setOperationalTicketState('stale'); setOperationalTicketError(cause instanceof Error ? cause.message : 'Ticket creation failed.') })
+      .catch((cause) => { setOperationalTicketState('stale'); setOperationalTicketError(describeCompanionFailure(cause, 'Ticket creation failed.')) })
   }, [operationalRepository])
 
   const performStatusChange = useCallback(async (id: string, status: Ticket['status']) => {
@@ -238,7 +239,7 @@ export default function App({ operationalRepository }: { operationalRepository: 
       const updated = await operationalRepository.updateTicketStatus(ticket, status)
       setTickets((prev) => prev.map((item) => item.id === id ? updated : item))
     } catch (cause) {
-      const message = cause instanceof Error ? cause.message : 'Ticket update failed.'
+      const message = describeCompanionFailure(cause, 'Ticket update failed.')
       setOperationalTicketState('stale')
       setOperationalTicketError(message)
       throw cause
@@ -254,13 +255,13 @@ export default function App({ operationalRepository }: { operationalRepository: 
     if (!ticket) return
     void operationalRepository.addWorkNote(ticket, text, 'Henry')
       .then((updated) => setTickets((prev) => prev.map((item) => item.id === id ? updated : item)))
-      .catch((cause) => { setOperationalTicketState('stale'); setOperationalTicketError(cause instanceof Error ? cause.message : 'Note update failed.') })
+      .catch((cause) => { setOperationalTicketState('stale'); setOperationalTicketError(describeCompanionFailure(cause, 'Note update failed.')) })
   }, [operationalRepository, tickets])
 
   const handleDelete = useCallback((id: string) => {
     void operationalRepository.deleteTicket(id)
       .then(() => setTickets((prev) => prev.filter((ticket) => ticket.id !== id)))
-      .catch((cause) => { setOperationalTicketState('stale'); setOperationalTicketError(cause instanceof Error ? cause.message : 'Ticket deletion failed.') })
+      .catch((cause) => { setOperationalTicketState('stale'); setOperationalTicketError(describeCompanionFailure(cause, 'Ticket deletion failed.')) })
   }, [operationalRepository])
 
   const handleRecommendRoute = useCallback((ticket: Ticket) => {
@@ -284,7 +285,7 @@ export default function App({ operationalRepository }: { operationalRepository: 
       await refreshOperationalEmails()
       if (run.state === 'failed') setGmailError(run.errorCode ?? 'Gmail check failed.')
     } catch (cause) {
-      setGmailError(cause instanceof Error ? cause.message : 'Gmail check failed.')
+      setGmailError(describeCompanionFailure(cause, 'Gmail check failed.'))
     } finally {
       setEmailLoading(false)
     }
@@ -315,7 +316,7 @@ export default function App({ operationalRepository }: { operationalRepository: 
       setGmailError('OAUTH_TIMEOUT: Google consent did not complete. Reconnect Gmail to try again.')
     } catch (cause) {
       consentWindow.close()
-      setGmailError(cause instanceof Error ? cause.message : 'Gmail authorization did not complete.')
+      setGmailError(describeCompanionFailure(cause, 'Gmail authorization did not complete.'))
     } finally {
       setEmailLoading(false)
     }
@@ -328,7 +329,7 @@ export default function App({ operationalRepository }: { operationalRepository: 
       const updated = await operationalRepository.decideEmailCandidate(candidate, action)
       setGmailCandidates((current) => current.map((item) => item.accountId === updated.accountId && item.threadId === updated.threadId ? updated : item))
     } catch (cause) {
-      const message = cause instanceof Error ? cause.message : 'Candidate decision failed.'
+      const message = describeCompanionFailure(cause, 'Candidate decision failed.')
       setGmailError(message === 'RECORD_CHANGED' ? 'RECORD_CHANGED: refresh before retrying; the newer decision was preserved.' : message)
     }
   }, [operationalRepository])
@@ -346,7 +347,7 @@ export default function App({ operationalRepository }: { operationalRepository: 
         : item))
       await refreshOperationalTickets()
     } catch (cause) {
-      const message = cause instanceof Error ? cause.message : 'Association failed.'
+      const message = describeCompanionFailure(cause, 'Association failed.')
       setGmailError(`${message}. Confirmation remains untracked and retryable.`)
       throw cause
     }
@@ -378,7 +379,7 @@ export default function App({ operationalRepository }: { operationalRepository: 
       }
       await refreshOperationalTickets()
     } catch (cause) {
-      setReconciliationError(cause instanceof Error ? cause.message : 'Reconciliation refresh failed.')
+      setReconciliationError(describeCompanionFailure(cause, 'Reconciliation refresh failed.'))
     } finally {
       setReconciliationBusy(false)
     }
@@ -396,7 +397,7 @@ export default function App({ operationalRepository }: { operationalRepository: 
       await monitorReconciliation(initial)
     } catch (cause) {
       setReconciliationBusy(false)
-      const message = cause instanceof Error ? cause.message : 'Reconciliation could not start.'
+      const message = describeCompanionFailure(cause, 'Reconciliation could not start.')
       setReconciliationError(message)
       throw cause
     }
@@ -410,7 +411,7 @@ export default function App({ operationalRepository }: { operationalRepository: 
       await monitorReconciliation(initial)
     } catch (cause) {
       setReconciliationBusy(false)
-      const message = cause instanceof Error ? cause.message : 'Source retry could not start.'
+      const message = describeCompanionFailure(cause, 'Source retry could not start.')
       setReconciliationError(message)
       throw cause
     }

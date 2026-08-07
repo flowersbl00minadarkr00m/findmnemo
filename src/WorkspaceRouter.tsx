@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { getWorkspaceKind } from './lib/settings'
 import { WorkspaceLanding } from './components/WorkspaceLanding'
 import { OperationalOnboarding } from './components/OperationalOnboarding'
+import { InstallGuide } from './components/InstallGuide'
 import { SampleWorkspace } from './SampleWorkspace'
 
 export function WorkspaceRouter() {
@@ -18,6 +19,7 @@ export function WorkspaceRouter() {
   const workspace = sampleVerificationFixture ? 'sample' : getWorkspaceKind(pathname)
   if (workspace === 'landing') return <WorkspaceLanding operationalEnabled={operationalEnabled} />
   if (workspace === 'sample') return <SampleWorkspace />
+  if (workspace === 'install') return <InstallGuide />
   if (workspace === 'operational' && operationalEnabled) return <OperationalOnboarding />
   if (workspace === 'operational') {
     return (

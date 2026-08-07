@@ -1303,6 +1303,8 @@ async function serveSpa(response: ServerResponse, pathname: string, distPath: st
     || pathname.startsWith('/app/')
     || pathname === '/demo'
     || pathname.startsWith('/demo/')
+    || pathname === '/install'
+    || pathname.startsWith('/install/')
   const requestedPath = isAppRoute ? 'index.html' : pathname.replace(/^\/+/, '')
   const root = resolve(distPath)
   const filePath = resolve(root, requestedPath)

@@ -32,7 +32,8 @@ describe('companion connection state', () => {
     }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(getCompanionIdentity(5)).rejects.toMatchObject({ name: 'AbortError' })
+    await expect(getCompanionIdentity(5)).rejects.toMatchObject({ name: 'CompanionUnreachableError', code: 'COMPANION_PROBE_TIMEOUT' })
+    expect(fetchMock).toHaveBeenCalledOnce()
   })
 
   it('rotates two minutes before expiry and immediately when the rotation window has started', () => {

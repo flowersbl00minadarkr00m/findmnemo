@@ -9,6 +9,7 @@ import {
   updateSampleTicketStatus,
 } from './lib/sample-repository'
 import { getWorkspaceKind } from './lib/settings'
+import { COMPANION_CONNECTED_BEFORE_KEY } from './lib/companion-connection'
 
 describe('workspace route separation', () => {
   beforeEach(() => {
@@ -23,6 +24,7 @@ describe('workspace route separation', () => {
     expect(getWorkspaceKind('/demo')).toBe('sample')
     expect(getWorkspaceKind('/demo/tickets')).toBe('sample')
     expect(getWorkspaceKind('/app')).toBe('operational')
+    expect(getWorkspaceKind('/install')).toBe('install')
     expect(getWorkspaceKind('/assets/index.js')).toBe('not-found')
     expect(getWorkspaceKind('/api/v1/status')).toBe('not-found')
   })
@@ -114,10 +116,36 @@ describe('workspace route separation', () => {
 
     expect(await screen.findByText('Local companion not detected')).toBeVisible()
     expect(screen.getByRole('heading', { name: 'The local companion must be installed and running' })).toBeVisible()
-    expect(screen.getByRole('link', { name: 'Open Windows install and source-run guidance' })).toHaveAttribute('href', expect.stringContaining('unsigned-windows-preview.md'))
+    expect(screen.getByRole('link', { name: 'Open Windows install and source-run guidance' })).toHaveAttribute('href', '/install')
     expect(screen.getByRole('link', { name: 'Open local app (requires companion running)' })).toHaveAttribute('href', 'http://127.0.0.1:3210/app')
     expect(screen.getByRole('button', { name: 'Retry connection' })).toBeEnabled()
     expect(screen.getByRole('alert')).toHaveTextContent('COMPANION_UNREACHABLE')
+    expect(screen.queryByText(/Failed to fetch/i)).not.toBeInTheDocument()
+  })
+
+  it('diagnoses an unreachable companion as stopped once this browser has connected before', async () => {
+    window.localStorage.setItem(COMPANION_CONNECTED_BEFORE_KEY, 'true')
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
+    window.history.replaceState({}, '', '/app')
+    render(<WorkspaceRouter />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect this computer' }))
+
+    expect(await screen.findByText('FindMnemo is installed but not answering')).toBeVisible()
+    expect(screen.getByRole('heading', { name: 'FindMnemo is installed here but is not answering' })).toBeVisible()
+    expect(screen.getByText(/Accept the Windows firewall prompt/i)).toBeVisible()
+    expect(screen.queryByText('Local companion not detected')).not.toBeInTheDocument()
+  })
+
+  it('shows a branded in-app install and recovery page instead of a raw markdown file', () => {
+    window.history.replaceState({}, '', '/install')
+    render(<WorkspaceRouter />)
+
+    expect(screen.getByRole('heading', { name: 'Get the local companion running' })).toBeVisible()
+    expect(screen.getByRole('heading', { name: 'Already installed but nothing is answering' })).toBeVisible()
+    expect(screen.getByText(/Port 3210 is already in use/i)).toBeVisible()
+    expect(screen.getByText(/quarantined the companion/i)).toBeVisible()
+    expect(screen.getByRole('heading', { name: 'Why Windows warns about this build' })).toBeVisible()
   })
 
   it('offers reset and exit controls on every Sample workspace view', () => {

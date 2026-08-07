@@ -3,7 +3,9 @@
     { "source": "/demo", "destination": "/index.html" },
     { "source": "/demo/:path*", "destination": "/index.html" },
     { "source": "/app", "destination": "/index.html" },
-    { "source": "/app/:path*", "destination": "/index.html" }
+    { "source": "/app/:path*", "destination": "/index.html" },
+    { "source": "/install", "destination": "/index.html" },
+    { "source": "/install/:path*", "destination": "/index.html" }
   ],
   "headers": [
     {
