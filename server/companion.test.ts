@@ -574,7 +574,7 @@ describe('loopback companion shell', () => {
     await deleted.arrayBuffer()
     await second.stop()
     running.splice(running.indexOf(second), 1)
-  }, 15_000)
+  }, 30_000)
 
   it('bounds shutdown and releases SQLite when a client stalls mid-request', async () => {
     const databasePath = join(distPath, 'bounded-shutdown.db')

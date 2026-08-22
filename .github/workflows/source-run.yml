@@ -62,5 +62,6 @@ jobs:
           architecture: x64
           cache: npm
       - run: npm ci
+      - run: npm run generate:windows-icon
       - run: npm run check:desktop-boundary
       - run: npm run build:desktop
