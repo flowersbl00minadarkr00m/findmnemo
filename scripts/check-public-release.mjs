@@ -4,7 +4,7 @@ import { extname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)))
-const negativePrefix = 'scripts/fixtures/public-release/negative/'
+const negativePrefix = 'scripts/fixtures/public-release/rejected/'
 const rules = [
   ['google-client-secret', /GOCSPX-[A-Za-z0-9_-]{8,}/g],
   ['google-access-token', /ya29\.[A-Za-z0-9_-]{8,}/g],
@@ -18,12 +18,22 @@ const rules = [
   ['agent-activity-private-canary', /AGENT_ACTIVITY_(?:PROMPT|RESPONSE|TRANSCRIPT|REASONING|CREDENTIAL|PATH|CONFIG|RAW_LOG|RETRY|CROSS_SITE|SAMPLE)_PRIVATE_CANARY/g],
 ]
 const prohibitedExtensions = new Set(['.db', '.sqlite', '.sqlite3', '.dpapi', '.pem', '.key', '.p12', '.pfx', '.log'])
+const prohibitedPaths = new Set(['AGENTS.md', 'WORKER_REMIT.md'])
+const prohibitedPrefixes = ['.ai/']
 
 const positive = read('scripts/fixtures/public-release/sanitized.json')
 if (scanText(positive).length) throw new Error('PUBLIC_RELEASE_BOUNDARY_FAILED: sanitized positive fixture was rejected.')
-for (const fixture of ['credential.txt', 'runtime.db', 'raw.log', 'agent-activity.txt']) {
-  const path = `${negativePrefix}${fixture}`
-  if (scanFile(path).length === 0) throw new Error(`PUBLIC_RELEASE_BOUNDARY_FAILED: negative fixture ${fixture} was not rejected.`)
+const negativeFixtures = [
+  ['credential.txt', 'secret-pattern.fixture.txt'],
+  ['runtime.db', 'database-extension.fixture.txt'],
+  ['raw.log', 'log-extension.fixture.txt'],
+  ['agent-activity.txt', 'agent-private-marker.fixture.txt'],
+]
+for (const [simulatedPath, sourceName] of negativeFixtures) {
+  const sourcePath = `${negativePrefix}${sourceName}`
+  if (scanFile(`${negativePrefix}${simulatedPath}`, sourcePath).length === 0) {
+    throw new Error(`PUBLIC_RELEASE_BOUNDARY_FAILED: negative fixture ${sourceName} was not rejected.`)
+  }
 }
 
 const listed = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], { cwd: root, encoding: 'utf8' }).split('\0').filter(Boolean)
@@ -39,9 +49,13 @@ if (findings.length) {
   console.log(`Public release boundary passed (${listed.length} tracked/untracked candidate paths; negative fixtures rejected).`)
 }
 
-function scanFile(path) {
-  const full = resolve(root, path)
+function scanFile(path, sourcePath = path) {
+  const full = resolve(root, sourcePath)
   const findings = []
+  const normalizedPath = path.replaceAll('\\', '/')
+  if (prohibitedPaths.has(normalizedPath) || prohibitedPrefixes.some((prefix) => normalizedPath.startsWith(prefix))) {
+    findings.push({ path, rule: 'internal-agent-artifact' })
+  }
   if (prohibitedExtensions.has(extname(path).toLowerCase())) findings.push({ path, rule: 'prohibited-runtime-artifact' })
   if (statSync(full).size > 15 * 1024 * 1024 && !/\.(?:png|jpg|jpeg|webp)$/i.test(path)) findings.push({ path, rule: 'unexpected-large-artifact' })
   const text = readFileSync(full, 'utf8')

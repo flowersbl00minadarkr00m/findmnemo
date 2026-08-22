@@ -41,7 +41,7 @@ describe('routing destination discovery', () => {
     const runner = new FakeRunner({ pi: found, 'pi.cmd': found })
     const broken: DestinationAdapter = {
       manifest: { ...manifest, adapterId: 'broken', executableLabel: 'broken' },
-      detect: async () => { throw new Error('private C:\\Users\\henry\\tool.exe output') },
+      detect: async () => { throw new Error('private C:\\Users\\ExampleUser\\tool.exe output') },
     }
     const result = await new DiscoveryService([createPiDetectionAdapter(runner, NOW), broken], NOW).discover()
     expect(result.complete).toBe(true)
@@ -49,6 +49,6 @@ describe('routing destination discovery', () => {
       expect.objectContaining({ adapterId: 'pi-rpc', installation: 'detected', compatibility: 'supported', controllability: 'controllable', readiness: 'unchecked' }),
       expect.objectContaining({ adapterId: 'broken', installation: 'error', reasonCode: 'DETECTION_FAILED', readiness: 'unchecked' }),
     ]))
-    expect(JSON.stringify(result)).not.toContain('C:\\Users\\henry')
+    expect(JSON.stringify(result)).not.toContain('C:\\Users\\ExampleUser')
   })
 })

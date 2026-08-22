@@ -31,23 +31,8 @@ create table if not exists public.ai_receipts (
 
 alter table public.ai_receipts enable row level security;
 
-grant select on public.ai_receipts to anon, authenticated;
-revoke update on public.ai_receipts from anon, authenticated;
-grant update (human_disposition) on public.ai_receipts to anon, authenticated;
+revoke all on public.ai_receipts from anon, authenticated;
 
 drop policy if exists "AI receipts are readable by browser clients" on public.ai_receipts;
 
-create policy "AI receipts are readable by browser clients"
-on public.ai_receipts
-for select
-to anon, authenticated
-using (true);
-
 drop policy if exists "AI receipt human disposition is writable by browser clients" on public.ai_receipts;
-
-create policy "AI receipt human disposition is writable by browser clients"
-on public.ai_receipts
-for update
-to anon, authenticated
-using (true)
-with check (true);

@@ -39,12 +39,6 @@ create table if not exists public.project_progress_items (
 
 alter table public.project_progress_items enable row level security;
 
-grant select on public.project_progress_items to anon, authenticated;
+revoke all on public.project_progress_items from anon, authenticated;
 
 drop policy if exists "Project progress is readable by browser clients" on public.project_progress_items;
-
-create policy "Project progress is readable by browser clients"
-on public.project_progress_items
-for select
-to anon, authenticated
-using (true);

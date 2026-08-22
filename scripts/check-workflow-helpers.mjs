@@ -461,18 +461,15 @@ check('Ticket detail exposes human receipt disposition telemetry wiring', async 
   assert(source.includes('appendTelemetry'), 'ticket detail should persist human activity telemetry')
 })
 
-check('Receipt disposition persists to Supabase when a linked receipt exists', async () => {
+check('Receipt disposition is local by default and supports an injected durable writer', async () => {
   const detail = await fs.readFile(new URL('../src/components/ReceiptDispositionControls.tsx', import.meta.url), 'utf8')
-  const supabase = await fs.readFile(new URL('../src/lib/supabase.ts', import.meta.url), 'utf8')
   const sql = await fs.readFile(new URL('../supabase/ai_receipts.sql', import.meta.url), 'utf8')
 
-  assert(detail.includes('updateAiReceiptHumanDisposition'), 'ticket detail should call Supabase receipt disposition persistence')
+  assert(detail.includes('!updateDisposition'), 'public browser flow should remain local unless a trusted host injects a writer')
   assert(detail.includes("'accepted'") && detail.includes("'rejected'"), 'ticket detail should map accept/reject actions to durable dispositions')
-  assert(supabase.includes('updateAiReceiptHumanDisposition'), 'Supabase helper should expose receipt disposition update')
-  assert(supabase.includes(".from('ai_receipts')"), 'Supabase helper should target ai_receipts')
-  assert(supabase.includes('human_disposition'), 'Supabase helper should update human_disposition')
-  assert(sql.includes('grant update (human_disposition)'), 'SQL should grant column-limited update for human_disposition')
-  assert(sql.includes('for update'), 'SQL should include an update RLS policy for receipt disposition')
+  assert(detail.includes('local telemetry only'), 'public UI should disclose that default receipt evidence is local')
+  assert(sql.includes('revoke all'), 'SQL should revoke all browser access to AI receipts')
+  assert(!sql.includes('grant update (human_disposition)'), 'SQL should not grant anonymous receipt mutation')
 })
 
 check('Large-view bundle splitting is implemented and documented as a review standard', async () => {

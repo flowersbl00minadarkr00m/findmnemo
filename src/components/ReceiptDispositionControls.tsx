@@ -10,7 +10,7 @@ export type ReceiptDispositionWriter = (
 
 export function ReceiptDispositionControls({
   ticket,
-  updateDisposition = defaultDispositionWriter,
+  updateDisposition,
 }: {
   ticket: Ticket
   updateDisposition?: ReceiptDispositionWriter
@@ -39,9 +39,9 @@ export function ReceiptDispositionControls({
       artifactRefs: ticket.artifacts.map((artifact) => ({ label: artifact.label, ref: artifact.url ?? artifact.id })),
     })
     appendTelemetry(event)
-    setLastRecorded({ label, remoteState: humanDisposition ? 'saving' : 'local-only' })
+    setLastRecorded({ label, remoteState: humanDisposition && updateDisposition ? 'saving' : 'local-only' })
 
-    if (!humanDisposition || !primaryReceiptId) return
+    if (!humanDisposition || !primaryReceiptId || !updateDisposition) return
     const result = await updateDisposition(primaryReceiptId, humanDisposition)
     setLastRecorded({
       label,
@@ -68,19 +68,14 @@ export function ReceiptDispositionControls({
       {lastRecorded && (
         <p role="status" className={`mt-2 text-[10px] font-mono ${lastRecorded.remoteState === 'failed' ? 'text-warn' : 'text-ok'}`}>
           Recorded: {lastRecorded.label}
-          {lastRecorded.remoteState === 'saved' && ' / Supabase disposition saved'}
-          {lastRecorded.remoteState === 'saving' && ' / saving Supabase disposition...'}
+          {lastRecorded.remoteState === 'saved' && ' / durable disposition saved'}
+          {lastRecorded.remoteState === 'saving' && ' / saving durable disposition...'}
           {lastRecorded.remoteState === 'local-only' && ' / local telemetry only'}
-          {lastRecorded.remoteState === 'failed' && ` / Supabase update failed: ${lastRecorded.error ?? 'unknown error'}`}
+          {lastRecorded.remoteState === 'failed' && ` / durable update failed: ${lastRecorded.error ?? 'unknown error'}`}
         </p>
       )}
     </section>
   )
-}
-
-async function defaultDispositionWriter(receiptId: string, disposition: HumanReceiptDisposition) {
-  const { updateAiReceiptHumanDisposition } = await import('../lib/supabase')
-  return updateAiReceiptHumanDisposition(receiptId, disposition)
 }
 
 function DispositionButton({ children, disabled, onClick }: { children: ReactNode; disabled?: boolean; onClick: () => void }) {
