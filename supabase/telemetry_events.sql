@@ -1,8 +1,8 @@
 -- FindMnemo telemetry_events table
 -- Single source of truth for cross-agent work telemetry.
 -- Pi, Codex, and Claude Cowork write via service role key.
--- FindMnemo browser app reads via anon key (RLS).
--- Flowsensa can also read for process reconstruction.
+-- Operational rows are service-role only. Public browser builds import
+-- explicit user-selected exports instead of reading this table.
 
 CREATE TABLE IF NOT EXISTS telemetry_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -37,13 +37,11 @@ CREATE INDEX IF NOT EXISTS idx_telemetry_timestamp ON telemetry_events (timestam
 -- Index for agent source filtering
 CREATE INDEX IF NOT EXISTS idx_telemetry_agent_source ON telemetry_events (agent_source);
 
--- Enable Realtime for live ingestion into FindMnemo dashboard
+-- Realtime remains available to trusted server-side consumers.
 ALTER PUBLICATION supabase_realtime ADD TABLE telemetry_events;
 
--- RLS: anon key can read; service role bypasses RLS for writes
+-- Service role bypasses RLS. Browser roles receive no table access.
 ALTER TABLE telemetry_events ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "anon_can_read_telemetry"
-  ON telemetry_events
-  FOR SELECT
-  USING (true);
+REVOKE ALL ON TABLE telemetry_events FROM anon, authenticated;
+DROP POLICY IF EXISTS "anon_can_read_telemetry" ON telemetry_events;

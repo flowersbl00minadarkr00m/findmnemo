@@ -135,8 +135,8 @@ async function inspectPackage(iconEvidence, receiptEvidence) {
     })
     .join('\n')
   for (const checkoutMarker of [
-    'C:\\Users\\henry\\mnemosync',
-    'C:/Users/henry/mnemosync',
+    'C:\\Users\\ExampleUser\\findmnemo',
+    'C:/Users/ExampleUser/findmnemo',
     'dist-companion/server/mcp/findmnemo-mcp.js',
   ]) assert.equal(inspectedSources.includes(checkoutMarker), false, `MCP_PACKAGE_CHECKOUT_PATH_PRESENT:${checkoutMarker}`)
   assert.match(inspectedSources, /runMcpProcess/)

@@ -13,14 +13,15 @@ const verifierPath = resolve('scripts', 'verify-mcp-package-windows.mjs')
 test('preserves USERPROFILE while isolating application data, temp, and HOME', async (context) => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), 'findmnemo-verifier-environment-'))
   context.after(() => rm(temporaryRoot, { recursive: true, force: true }))
+  const fixtureProfile = ['C:', 'Users', 'fixture'].join('\\')
 
   const parentEnvironment = {
-    USERPROFILE: String.raw`C:\Users\verifier-parent`,
-    APPDATA: String.raw`C:\Users\verifier-parent\AppData\Roaming`,
-    LOCALAPPDATA: String.raw`C:\Users\verifier-parent\AppData\Local`,
-    TEMP: String.raw`C:\Users\verifier-parent\AppData\Local\Temp`,
-    TMP: String.raw`C:\Users\verifier-parent\AppData\Local\Temp`,
-    HOME: String.raw`C:\Users\verifier-parent`,
+    USERPROFILE: fixtureProfile,
+    APPDATA: join(fixtureProfile, 'AppData', 'Roaming'),
+    LOCALAPPDATA: join(fixtureProfile, 'AppData', 'Local'),
+    TEMP: join(fixtureProfile, 'AppData', 'Local', 'Temp'),
+    TMP: join(fixtureProfile, 'AppData', 'Local', 'Temp'),
+    HOME: fixtureProfile,
     PATH: String.raw`C:\Windows\System32`,
     FINDMNEMO_ACTIVITY_ACCEPTANCE: 'parent-value',
   }

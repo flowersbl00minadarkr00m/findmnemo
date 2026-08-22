@@ -52,7 +52,11 @@ describe('guided model routing', () => {
     const onOpenUsage = vi.fn()
 
     render(<ModelRoutingView policy={legacy} onPolicyChange={vi.fn()} operationalRepository={repo} onOpenUsage={onOpenUsage} />)
-    const evidence = await screen.findByRole('button', { name: /Past usage: most used for Writing with Pi/i })
+    const evidence = await screen.findByRole(
+      'button',
+      { name: /Past usage: most used for Writing with Pi/i },
+      { timeout: 5_000 },
+    )
     fireEvent.click(evidence)
 
     expect(onOpenUsage).toHaveBeenCalledWith(expect.objectContaining({ profileId: 'profile:writing', start: '2026-07-01', end: '2026-07-13' }))

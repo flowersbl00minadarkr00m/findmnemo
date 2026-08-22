@@ -27,4 +27,4 @@ Do not publish or mirror the current `.git` history. T8 must create a clean publ
 
 ## Local release candidate
 
-A clean single-commit snapshot with generic release identity was created and verified independently from the private working history. Its 225-file source archive and clownfish-branded Windows unsigned-preview checksum/provenance are recorded in `release-evidence/findmnemo-0.1.0-rc.json` and `release-evidence/SHA256SUMS.txt`. The artifacts themselves remain under ignored `release-desktop/`; this is a local candidate, not an external release or a completed cross-platform support claim.
+A clean single-commit snapshot with generic release identity was created and verified independently from the private working history. Its 225-file source archive and clownfish-branded Windows unsigned-preview checksum/provenance are recorded in `docs/release-evidence/findmnemo-0.1.0-rc.json` and `docs/release-evidence/SHA256SUMS.txt`. The artifacts themselves remain under ignored `release-desktop/`; this is a local candidate, not an external release or a completed cross-platform support claim.

@@ -39,8 +39,6 @@ __pycache__
 .env
 .env.*
 !.env.example
-!scripts/fixtures/public-release/negative/runtime.db
-!scripts/fixtures/public-release/negative/raw.log
 
 # Editor directories and files
 .vscode/*

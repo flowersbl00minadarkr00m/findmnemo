@@ -149,7 +149,7 @@ describe('FindMnemo database', () => {
         UNIQUE(assignment_key,sequence)
       );
     `)
-    const assignmentKey = 'f150038ba2c01238297d909369f2dde97a826a5eb9b983268996feadde075da9'
+    const assignmentKey = 'f150038ba2c01238297d909369f2dde97a826a5eb9b983268996feadde075da9' // gitleaks:allow — fixed test digest
     const ticketId = 'legacy-ticket-linked'
     const eventId = assignmentEventFixture().eventId
     legacy.prepare(`INSERT INTO tickets(id,status,source,origin,created_at,updated_at,payload_json,completed_at)

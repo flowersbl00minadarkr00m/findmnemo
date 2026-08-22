@@ -9,6 +9,10 @@ The operational route at `/app` requires the local Windows companion to be insta
 [![Source run](https://github.com/flowersbl00minadarkr00m/findmnemo/actions/workflows/source-run.yml/badge.svg)](https://github.com/flowersbl00minadarkr00m/findmnemo/actions/workflows/source-run.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+## Series context
+
+FindMnemo is the proof object for [*Mo Agents, Mo Problems*](https://henryflowers45.substack.com/p/mo-agents-mo-problems), part of the *Looping in the Human* series.
+
 ![FindMnemo operations desk](docs/assets/hero.png)
 
 ## Features
@@ -58,6 +62,7 @@ External Codex, Claude, and Pi sessions need a local bridge or browser automatio
 - Operational data stays in the companion's local SQLite; nothing operational is hosted.
 - Gmail is metadata-scope only — bodies and credentials are barred from logs, telemetry, and the browser.
 - Agent activity excludes prompts, transcripts, paths, and file contents; only bounded lifecycle metadata is retained.
+- The public browser build has no cloud telemetry writer; receipt decisions and operational records remain local to the companion.
 
 Details: [data portability](docs/data-privacy.md) · [agent activity boundary](docs/agent-activity.md)
 

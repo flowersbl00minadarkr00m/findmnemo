@@ -35,4 +35,4 @@ FindMnemo never invokes Tokscale login, logout, whoami, submit, autosubmit, lead
 - FindMnemo does not claim that Tokscale's estimated cost is provider billing or subscription quota data.
 - The companion does not issue network requests for pricing, accounts, or social features. The acceptance harness does not instrument sockets opened internally by the Tokscale process, so it makes no broader claim about Tokscale's own networking.
 
-The current measured Windows evidence is in [Spec 006 Windows acceptance](../../release-evidence/spec-006-windows-tokscale.md).
+The current measured Windows evidence is in [Spec 006 Windows acceptance](../release-evidence/spec-006-windows-tokscale.md).
